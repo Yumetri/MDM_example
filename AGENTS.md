@@ -55,6 +55,24 @@ Use typed settings only. Never commit `.env`, credentials, or real data; maintai
 
 Finish code changes with `make ci-check`. Fix failures or report the blocker and unverified scope.
 
+## Commit and Pull Request Workflow
+
+Before every agent-authored commit, stage all intended changes and require the working tree to have
+no unstaged tracked files or non-ignored untracked files. Review the complete staged diff with the
+`$review-agent` skill in read-only mode. If the skill is unavailable, report a blocker instead of
+skipping review. Do not commit while the review has actionable findings: fix them, restage, and
+repeat the review until it reports `No findings.` Commit only after that result and a successful
+pre-commit `make ci-check` run.
+
+After pushing a new commit that addresses feedback on an existing pull request, wait for the
+required `quality` check to pass. Reply to every addressed review thread with a concise summary and
+the fixing commit SHA, and resolve a thread only when its feedback is fully addressed. Compare the
+pull request head SHA with the commit from the latest Codex review. If they differ and no Codex
+review is pending, post exactly one separate top-level `@codex review` comment for that head SHA.
+Never request more than one review for the same head commit. Do not post this manual request for a
+newly opened pull request, description-only edits, or comment-only updates. If the new review has
+actionable findings, repeat the fix, validation, reply, and rereview cycle.
+
 ## Code Review Rules
 
 Verify router purity, composition-root scope, nonblocking async I/O, explicit transactions,
