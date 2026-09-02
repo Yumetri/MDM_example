@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from mdm.api.documentation import build_documentation_router
 from mdm.api.errors import (
     readiness_unavailable_handler,
     unexpected_error_handler,
@@ -46,7 +47,9 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
                 "description": "Check whether the service is running and ready for traffic.",
             }
         ],
+        docs_url=None,
         lifespan=lifespan,
+        redoc_url=None,
     )
     application.add_exception_handler(
         ReadinessUnavailable,
@@ -58,6 +61,7 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
     )
     application.add_exception_handler(Exception, unexpected_error_handler)
     application.include_router(build_health_router(readiness_check))
+    application.include_router(build_documentation_router(application))
     configure_openapi(application)
     return application
 
