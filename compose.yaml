@@ -8,7 +8,11 @@ services:
     ports:
       - "${MDM_POSTGRES_PORT:-55432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mdm -d mdm"]
+      test:
+        [
+          "CMD-SHELL",
+          "PGPASSWORD=\"$${POSTGRES_PASSWORD}\" psql -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d mdm_test -tAc 'SELECT 1'",
+        ]
       interval: 2s
       timeout: 3s
       retries: 20

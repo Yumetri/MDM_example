@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+untracked_files=$(git ls-files --others --exclude-standard)
+if ! git diff --quiet -- || [ -n "$untracked_files" ]; then
+    echo "Commit blocked: the working tree does not match the staged snapshot." >&2
+    echo "Stage, stash, or remove the following changes, then retry:" >&2
+    git status --short >&2
+    exit 1
+fi
+
+exec make ci-check

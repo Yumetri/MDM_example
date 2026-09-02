@@ -24,7 +24,8 @@ boundaries. Keep `main.py` to assembly and registration. Never share sessions ac
 
 Use `make setup`, `make db-up`, `make migrate`, and `make dev` locally. Apply `make format`; run
 targeted `make lint`, `make typecheck`, `make architecture`, `make test-unit`,
-`make test-integration`, or `make openapi-check`. `make check` is the local and CI acceptance gate.
+`make test-integration`, or `make openapi-check`. `make check` is the fast local acceptance gate.
+`make ci-check` is the clean-database gate shared by the pre-commit hook and CI.
 
 ## TDD and Testing
 
@@ -52,7 +53,26 @@ Use typed settings only. Never commit `.env`, credentials, or real data; maintai
 
 ## Completion and Failure Reporting
 
-Finish code changes with `make check`. Fix failures or report the blocker and unverified scope.
+Finish code changes with `make ci-check`. Fix failures or report the blocker and unverified scope.
+
+## Commit and Pull Request Workflow
+
+Before every agent-authored commit, stage all intended changes and require the working tree to have
+no unstaged tracked files or non-ignored untracked files. Review the complete staged diff with the
+`$review-agent` skill in read-only mode. If the skill is unavailable, report a blocker instead of
+skipping review. Do not commit while the review has actionable findings: fix them, restage, and
+repeat the review until it reports `No findings.` Commit only after that result and a successful
+pre-commit `make ci-check` run.
+
+After pushing a new commit that addresses feedback on an existing pull request, wait for the
+required `quality` check to pass. Reply to every addressed review thread with a concise summary and
+the fixing commit SHA, and resolve a thread only when its feedback is fully addressed. Compare the
+pull request head SHA with the commit from the latest Codex review. If they differ and no Codex
+review is pending, post exactly one separate top-level `@codex review` comment for that head SHA.
+Never request more than one review for the same head commit. Do not post this manual request for a
+newly opened pull request, description-only edits, or comment-only updates. Report the resulting
+PR review to the user, but do not automatically fix its findings or start another fix-and-rereview
+cycle unless the user explicitly requests it.
 
 ## Code Review Rules
 
