@@ -39,8 +39,10 @@ weaken, delete, or skip checks to pass CI.
 
 Use `async def` only for awaited I/O and never block its event loop. Separate Pydantic DTOs from DB
 models. Every endpoint needs a stable `operation_id`, tag, `response_model`, explicit status,
-summary, and user-facing English description. Describe public fields and examples. Document errors
-in `responses` with RFC 9457 Problem Details. Translate failures without leaking internals.
+summary, and user-facing description written in Korean by default. Describe public fields, examples,
+and error responses in natural Korean while preserving protocol-defined names, code identifiers,
+and data contracts. Document errors in `responses` with RFC 9457 Problem Details. Translate
+failures without leaking internals.
 
 After OpenAPI changes, run `make openapi`. Give only `.artifacts/openapi.json` and the review rubric
 to a fresh subagent without conversation context. Check typos, omissions, internal terminology,

@@ -29,6 +29,7 @@ async def test_docs_serves_scalar_for_the_existing_openapi_document() -> None:
     assert response.headers["content-type"].startswith("text/html")
     assert "@scalar/api-reference" in response.text
     assert '"url": "/openapi.json"' in response.text
+    assert "MDM API - Scalar API 문서" in response.text
     assert "Swagger UI" not in response.text
 
 
