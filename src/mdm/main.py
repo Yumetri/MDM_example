@@ -36,15 +36,15 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
 
     application = FastAPI(
         title="MDM API",
-        summary="Manage dimension-based master data",
+        summary="Dimension 기반 마스터 데이터 관리",
         description=(
-            "Service API for master data whose unique codes are derived from referenced dimensions."
+            "Dimension을 참조해 고유 코드를 생성하는 마스터 데이터를 관리하는 서비스 API입니다."
         ),
         version="0.1.0",
         openapi_tags=[
             {
                 "name": "Health",
-                "description": "Check whether the service is running and ready for traffic.",
+                "description": "서비스의 실행 상태와 요청 처리 준비 상태를 각각 확인합니다.",
             }
         ],
         docs_url=None,
