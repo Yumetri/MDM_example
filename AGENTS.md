@@ -24,7 +24,8 @@ boundaries. Keep `main.py` to assembly and registration. Never share sessions ac
 
 Use `make setup`, `make db-up`, `make migrate`, and `make dev` locally. Apply `make format`; run
 targeted `make lint`, `make typecheck`, `make architecture`, `make test-unit`,
-`make test-integration`, or `make openapi-check`. `make check` is the local and CI acceptance gate.
+`make test-integration`, or `make openapi-check`. `make check` is the fast local acceptance gate.
+`make ci-check` is the clean-database gate shared by the pre-commit hook and CI.
 
 ## TDD and Testing
 
@@ -52,7 +53,7 @@ Use typed settings only. Never commit `.env`, credentials, or real data; maintai
 
 ## Completion and Failure Reporting
 
-Finish code changes with `make check`. Fix failures or report the blocker and unverified scope.
+Finish code changes with `make ci-check`. Fix failures or report the blocker and unverified scope.
 
 ## Code Review Rules
 

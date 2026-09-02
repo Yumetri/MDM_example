@@ -18,4 +18,4 @@ jobs:
           enable-cache: true
           python-version: "3.13"
       - name: Run required checks
-        run: make check
+        run: make ci-check
