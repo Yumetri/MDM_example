@@ -70,8 +70,9 @@ the fixing commit SHA, and resolve a thread only when its feedback is fully addr
 pull request head SHA with the commit from the latest Codex review. If they differ and no Codex
 review is pending, post exactly one separate top-level `@codex review` comment for that head SHA.
 Never request more than one review for the same head commit. Do not post this manual request for a
-newly opened pull request, description-only edits, or comment-only updates. If the new review has
-actionable findings, repeat the fix, validation, reply, and rereview cycle.
+newly opened pull request, description-only edits, or comment-only updates. Report the resulting
+PR review to the user, but do not automatically fix its findings or start another fix-and-rereview
+cycle unless the user explicitly requests it.
 
 ## Code Review Rules
 
