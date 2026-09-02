@@ -1,8 +1,6 @@
 DEV_DATABASE_URL ?= postgresql+asyncpg://mdm:mdm-local@127.0.0.1:55432/mdm
 TEST_DATABASE_URL ?= postgresql+asyncpg://mdm:mdm-local@127.0.0.1:55432/mdm_test
-CI_COMPOSE_PROJECT ?= mdm-example-ci-check
-CI_POSTGRES_PORT ?= 55433
-CI_TEST_DATABASE_URL ?= postgresql+asyncpg://mdm:mdm-local@127.0.0.1:$(CI_POSTGRES_PORT)/mdm_test
+CI_COMPOSE_PROJECT_PREFIX ?= mdm-example-ci-check
 
 .PHONY: setup db-up db-ready db-down migrate migrate-test dev format lint typecheck \
 	architecture test-unit test-integration test openapi openapi-check lock-check check \
@@ -75,9 +73,14 @@ lock-check:
 check: lock-check lint typecheck architecture test openapi openapi-check
 
 ci-check:
-	@docker compose -p "$(CI_COMPOSE_PROJECT)" down -v --remove-orphans >/dev/null 2>&1 || true
 	@set -eu; \
-		trap 'docker compose -p "$(CI_COMPOSE_PROJECT)" down -v --remove-orphans >/dev/null 2>&1' EXIT; \
-		COMPOSE_PROJECT_NAME="$(CI_COMPOSE_PROJECT)" \
-		MDM_POSTGRES_PORT="$(CI_POSTGRES_PORT)" \
-		$(MAKE) check TEST_DATABASE_URL="$(CI_TEST_DATABASE_URL)"
+		ci_project="$(CI_COMPOSE_PROJECT_PREFIX)-$$$$"; \
+		export COMPOSE_PROJECT_NAME="$${ci_project}"; \
+		export MDM_POSTGRES_PORT=0; \
+		trap 'docker compose down -v --remove-orphans >/dev/null 2>&1' EXIT; \
+		docker compose up -d db; \
+		$(MAKE) db-ready; \
+		ci_port=$$(docker compose port db 5432 | awk -F: 'NR == 1 { print $$NF }'); \
+		test -n "$${ci_port}"; \
+		$(MAKE) check \
+			TEST_DATABASE_URL="postgresql+asyncpg://mdm:mdm-local@127.0.0.1:$${ci_port}/mdm_test"
