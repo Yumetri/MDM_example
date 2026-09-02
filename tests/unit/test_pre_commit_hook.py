@@ -25,13 +25,20 @@ def _prepare_repository(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     binary_directory = tmp_path / "bin"
     binary_directory.mkdir()
     invocation_log = tmp_path / "make-invocation.txt"
+    git_environment_log = tmp_path / "make-git-environment.txt"
     make_stub = binary_directory / "make"
-    make_stub.write_text('#!/bin/sh\nprintf "%s\\n" "$*" > "$MAKE_INVOCATION_LOG"\n')
+    make_stub.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" > "$MAKE_INVOCATION_LOG"\n'
+        'printf "GIT_DIR=%s\\nGIT_INDEX_FILE=%s\\n" "${GIT_DIR-unset}" '
+        '"${GIT_INDEX_FILE-unset}" > "$GIT_ENVIRONMENT_LOG"\n'
+    )
     make_stub.chmod(0o755)
 
     environment = os.environ.copy()
     environment["PATH"] = f"{binary_directory}:{environment['PATH']}"
     environment["MAKE_INVOCATION_LOG"] = str(invocation_log)
+    environment["GIT_ENVIRONMENT_LOG"] = str(git_environment_log)
     return repository, invocation_log, environment
 
 
@@ -54,6 +61,21 @@ def test_pre_commit_checks_a_staged_only_snapshot(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert invocation_log.read_text() == "ci-check\n"
+
+
+@pytest.mark.unit
+def test_pre_commit_does_not_leak_git_local_environment_to_ci_check(tmp_path: Path) -> None:
+    repository, invocation_log, environment = _prepare_repository(tmp_path)
+    environment["GIT_DIR"] = str(repository / ".git")
+    environment["GIT_INDEX_FILE"] = str(repository / ".git" / "index")
+
+    result = _run_hook(repository, environment)
+
+    assert result.returncode == 0
+    assert invocation_log.read_text() == "ci-check\n"
+    assert (tmp_path / "make-git-environment.txt").read_text() == (
+        "GIT_DIR=unset\nGIT_INDEX_FILE=unset\n"
+    )
 
 
 @pytest.mark.unit

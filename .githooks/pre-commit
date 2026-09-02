@@ -9,4 +9,9 @@ if ! git diff --quiet -- || [ -n "$untracked_files" ]; then
     exit 1
 fi
 
+git_local_environment=$(git rev-parse --local-env-vars)
+for variable_name in $git_local_environment; do
+    unset "$variable_name"
+done
+
 exec make ci-check
