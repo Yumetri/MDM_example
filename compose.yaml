@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: mdm
+      POSTGRES_PASSWORD: mdm-local
+      POSTGRES_USER: mdm
+    ports:
+      - "${MDM_POSTGRES_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mdm -d mdm"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - mdm-postgres-18-data:/var/lib/postgresql
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/10-create-test-db.sql:ro
+
+volumes:
+  mdm-postgres-18-data:

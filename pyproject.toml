@@ -1,0 +1,78 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mdm"
+version = "0.1.0"
+description = "Master data management API for dimension-derived master codes"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "alembic>=1.16",
+    "asyncpg>=0.30",
+    "fastapi[standard]>=0.116",
+    "pydantic-settings>=2.10",
+    "sqlalchemy[asyncio]>=2.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28",
+    "hypothesis>=6.138",
+    "import-linter>=2.3",
+    "pyrefly>=0.34",
+    "pytest>=8.4",
+    "pytest-asyncio>=1.1",
+    "ruff>=0.12",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mdm"]
+
+[tool.pytest.ini_options]
+addopts = ["--import-mode=importlib", "--strict-config", "--strict-markers"]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "api: HTTP API contract tests",
+    "integration: tests that require PostgreSQL",
+    "unit: tests without infrastructure dependencies",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["ASYNC", "B", "E", "F", "I", "RUF", "UP"]
+
+[tool.pyrefly]
+project_includes = ["src", "tests", "scripts"]
+python_version = "3.13"
+search_path = ["src"]
+
+[tool.importlinter]
+root_package = "mdm"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Clean architecture layers"
+type = "layers"
+layers = [
+    "mdm.api | mdm.infrastructure",
+    "mdm.application",
+    "mdm.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "Domain is framework independent"
+type = "forbidden"
+source_modules = ["mdm.domain"]
+forbidden_modules = ["fastapi", "httpx", "os", "pydantic_settings", "sqlalchemy"]
+
+[[tool.importlinter.contracts]]
+name = "Application is framework independent"
+type = "forbidden"
+source_modules = ["mdm.application"]
+forbidden_modules = ["fastapi", "httpx", "pydantic_settings", "sqlalchemy"]

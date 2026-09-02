@@ -1,0 +1,1 @@
+CREATE DATABASE mdm_test OWNER mdm;

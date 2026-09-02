@@ -1,0 +1,10 @@
+.artifacts/
+.env
+.hypothesis/
+.import_linter_cache/
+.pytest_cache/
+.pyrefly/
+.ruff_cache/
+.venv/
+__pycache__/
+*.py[cod]
