@@ -23,11 +23,9 @@ async def readiness_unavailable_handler(request: Request, exc: Exception) -> JSO
     return problem_response(
         ProblemDetails(
             type="https://api.example.com/problems/service-unavailable",
-            title="Service unavailable",
+            title="서비스를 사용할 수 없음",
             status=503,
-            detail=(
-                "The service cannot accept traffic because a required dependency is unavailable."
-            ),
+            detail=("필수 의존 서비스를 사용할 수 없어 현재 요청을 처리할 수 없습니다."),
             code="SERVICE_UNAVAILABLE",
             instance=request.url.path,
         )
@@ -46,9 +44,9 @@ async def validation_error_handler(request: Request, exc: Exception) -> JSONResp
     return problem_response(
         ProblemDetails(
             type="https://api.example.com/problems/validation-error",
-            title="Invalid request",
+            title="유효하지 않은 요청",
             status=422,
-            detail="One or more request fields are invalid.",
+            detail="하나 이상의 요청 필드가 유효하지 않습니다.",
             code="VALIDATION_ERROR",
             instance=request.url.path,
             violations=violations,
@@ -61,9 +59,9 @@ async def unexpected_error_handler(request: Request, exc: Exception) -> JSONResp
     return problem_response(
         ProblemDetails(
             type="https://api.example.com/problems/internal-error",
-            title="Internal server error",
+            title="서버 내부 오류",
             status=500,
-            detail="The service encountered an unexpected error.",
+            detail="서비스에서 예상하지 못한 오류가 발생했습니다.",
             code="INTERNAL_ERROR",
             instance=request.url.path,
         )
@@ -73,8 +71,8 @@ async def unexpected_error_handler(request: Request, exc: Exception) -> JSONResp
 def _safe_validation_message(error: dict[str, Any]) -> str:
     error_type = str(error.get("type", "invalid"))
     messages = {
-        "missing": "This field is required.",
-        "string_too_short": "This text is shorter than allowed.",
-        "string_too_long": "This text is longer than allowed.",
+        "missing": "필수 필드입니다.",
+        "string_too_short": "허용된 길이보다 짧은 문자열입니다.",
+        "string_too_long": "허용된 길이보다 긴 문자열입니다.",
     }
-    return messages.get(error_type, "This value is invalid.")
+    return messages.get(error_type, "유효하지 않은 값입니다.")

@@ -16,13 +16,13 @@ def build_documentation_router(application: FastAPI) -> APIRouter:
         response_class=HTMLResponse,
         response_model=None,
         status_code=status.HTTP_200_OK,
-        summary="View interactive API documentation",
-        description="Render the MDM API's OpenAPI document with Scalar.",
+        summary="대화형 API 문서 보기",
+        description="MDM API의 OpenAPI 문서를 Scalar로 표시합니다.",
     )
     def get_api_documentation() -> HTMLResponse:
         return get_scalar_api_reference(
             openapi_url=application.openapi_url,
-            title=f"{application.title} - Scalar API Reference",
+            title=f"{application.title} - Scalar API 문서",
         )
 
     return router
