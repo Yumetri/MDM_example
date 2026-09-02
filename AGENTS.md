@@ -66,15 +66,9 @@ skipping review. Do not commit while the review has actionable findings: fix the
 repeat the review until it reports `No findings.` Commit only after that result and a successful
 pre-commit `make ci-check` run.
 
-After pushing a new commit that addresses feedback on an existing pull request, wait for the
-required `quality` check to pass. Reply to every addressed review thread with a concise summary and
-the fixing commit SHA, and resolve a thread only when its feedback is fully addressed. Compare the
-pull request head SHA with the commit from the latest Codex review. If they differ and no Codex
-review is pending, post exactly one separate top-level `@codex review` comment for that head SHA.
-Never request more than one review for the same head commit. Do not post this manual request for a
-newly opened pull request, description-only edits, or comment-only updates. Report the resulting
-PR review to the user, but do not automatically fix its findings or start another fix-and-rereview
-cycle unless the user explicitly requests it.
+After pushing a commit that addresses review feedback on an existing pull request, use
+`$pr-review-followup` and follow it to completion. If the skill is unavailable, report the blocker.
+Do not invoke it for a newly opened pull request, description-only edits, or comment-only updates.
 
 ## Code Review Rules
 
