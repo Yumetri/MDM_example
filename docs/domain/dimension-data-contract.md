@@ -47,8 +47,8 @@ Dimension 타입은 운영 중 추가할 수 있는 데이터가 아니라 코�
 | `id` | `UUID` | 아니요 | `uuidv7()` | PK | 변경 금지 |
 | `code` | `VARCHAR(32)` | 아니요 | 없음 | 테이블 내 UNIQUE, `^[A-Z0-9]{1,32}$` | 조건부 PATCH로 변경 가능 |
 | `version` | `INTEGER` | 아니요 | `1` | `version >= 1` | 실제 상태 변경마다 정확히 1 증가 |
-| `created_at` | `TIMESTAMPTZ` | 아니요 | `CURRENT_TIMESTAMP` | DB 시각 | 변경 금지 |
-| `updated_at` | `TIMESTAMPTZ` | 아니요 | `CURRENT_TIMESTAMP` | DB 시각 | 실제 상태 변경 시 갱신 |
+| `created_at` | `TIMESTAMPTZ` | 아니요 | `statement_timestamp()` | DB 시각 | 변경 금지 |
+| `updated_at` | `TIMESTAMPTZ` | 아니요 | `statement_timestamp()` | DB 시각 | 실제 상태 변경 시 갱신 |
 | `deleted_at` | `TIMESTAMPTZ` | 예 | `NULL` | 활성 상태는 `IS NULL` | 삭제·복원 명령만 변경 가능 |
 
 클라이언트는 `id`, `version`, `created_at`, `updated_at`, `deleted_at`을 입력하지 않는다. 모든
@@ -66,8 +66,12 @@ deleted_at IS NULL OR (
 )
 ```
 
-시간은 PostgreSQL의 `CURRENT_TIMESTAMP`를 사용한다. 애플리케이션 호스트의 로컬 시계를
-저장하지 않으며 API에서는 UTC 기준 시각으로 직렬화한다.
+생성 시 created_at과 updated_at은 PostgreSQL의 `statement_timestamp()`로 같은 시각을 갖는다.
+기존 행을 바꿀 때는 행 잠금과 version 검사를 마친 뒤 DB에서
+`GREATEST(clock_timestamp(), updated_at)`을 한 번 평가해 mutation timestamp를 획득한다. 하나의
+mutation에 속한 Dimension 상태와 모든 로그는 이 값을 재사용한다. 따라서 먼저 시작해 잠금을
+기다린 트랜잭션도 이전 updated_at보다 과거인 시각을 기록하지 않는다. 애플리케이션 호스트의
+로컬 시계를 저장하지 않으며 API에서는 UTC 기준 시각으로 직렬화한다.
 
 ## 4. 타입별 value 계약
 
@@ -218,6 +222,12 @@ repository Protocol, API DTO는 타입별 경계를 유지한다. `DimensionCode
 - 일반 API에 `include_deleted` 옵션을 두지 않는다.
 - 응답 본문에 version을 포함하고 단건 응답은 같은 version의 강한 ETag를 제공한다.
 - 타입별 컬렉션 경로를 사용한다. 예: `/dimensions/years`, `/dimensions/memories`.
+- 복원 권한이 있는 인증된 운영자는 타입별
+  `GET /dimensions/{collection}/{id}/tombstone`에서 삭제된 행을 조회할 수 있다.
+- tombstone 응답은 id, code, 타입별 value, version, deleted_at과 현재 version의 강한 ETag를
+  제공한다. 활성 행은 `409 DIMENSION_NOT_DELETED`, 존재하지 않는 행은 `404`이다.
+- tombstone은 복원 대상을 확인하고 현재 precondition token을 얻기 위한 단건 경로이다. 일반
+  조회나 삭제 항목 목록을 대신하지 않는다.
 
 ### 8.3 조건부 PATCH
 
@@ -240,17 +250,19 @@ repository Protocol, API DTO는 타입별 경계를 유지한다. `DimensionCode
 - 문법 오류는 `400 INVALID_IF_MATCH`이다.
 - 현재 version과 불일치는 `412 PRECONDITION_FAILED`이다.
 - 존재하지 않거나 일반 경로에서 삭제된 행은 `404 DIMENSION_NOT_FOUND`이다.
+- 복원 요청의 `If-Match`는 직전에 조회한 tombstone 응답의 ETag를 사용한다.
 
 version 검사는 사용자의 조회 이후 발생한 변경을 감지한다. `SELECT ... FOR UPDATE` 행 잠금은
 현재 요청의 트랜잭션 동안 동시 변경을 직렬화한다. 둘을 함께 사용한다.
 
-repository SQL은 기대 version을 조건으로 확인하고 실제 변경 시 `version + 1`과
-`updated_at = CURRENT_TIMESTAMP`를 명시한다. DB BEFORE 트리거는 값을 자동 보정하지 않고
-다음을 검증한다.
+repository는 행 잠금 뒤 획득한 하나의 mutation timestamp를 transaction-local 신뢰 컨텍스트에
+설정한다. SQL은 기대 version을 조건으로 확인하고 실제 변경 시 `version + 1`과 이 timestamp를
+명시한다. DB BEFORE 트리거는 값을 자동 보정하지 않고 다음을 검증한다.
 
 - `id`와 `created_at`이 바뀌지 않았다.
 - 업무 상태가 실제로 바뀌면 version이 정확히 1 증가했다.
-- 실제 변경 시 updated_at이 DB의 현재 트랜잭션 시각이다.
+- 실제 변경 시 updated_at이 신뢰 컨텍스트의 mutation timestamp와 같고 이전 updated_at보다
+  과거가 아니다.
 - 업무 상태가 바뀌지 않으면 version과 updated_at도 바뀌지 않았다.
 - 신뢰된 actor 트랜잭션 컨텍스트가 존재한다.
 
@@ -290,6 +302,8 @@ MasterCode 생성도 참조할 Dimension을 잠그고 활성 상태를 확인해
 ### 11.2 복원
 
 - 복원 명령은 타입별 `POST /dimensions/{collection}/{id}/restore`를 사용한다.
+- 복원 전에 tombstone 단건 조회로 현재 ETag와 삭제 상태를 확인한다.
+- 복원 요청은 tombstone ETag와 일치하는 단일 강한 `If-Match`를 제공한다.
 - 삭제된 기존 UUID, code와 value를 그대로 사용한다.
 - deleted_at을 `NULL`로 바꾸고 updated_at과 version을 갱신한다.
 - 복원 로그 한 행은 `DELETED: true -> false`로 기록한다.
@@ -330,7 +344,7 @@ MasterCode 생성도 참조할 Dimension을 잠그고 활성 상태를 확인해
 | `reason` | `VARCHAR(500)` | 예 | 앞뒤 공백 제거, 빈 값은 `NULL` |
 | `actor_type` | `VARCHAR(6)` | 아니요 | `USER`, `SYSTEM` |
 | `actor_id` | `VARCHAR(255)` | 아니요 | 1~255자, 앞뒤 공백 없음 |
-| `changed_at` | `TIMESTAMPTZ` | 아니요 | DB `CURRENT_TIMESTAMP` |
+| `changed_at` | `TIMESTAMPTZ` | 아니요 | 해당 Dimension mutation timestamp |
 
 같은 변경에서 생성한 로그는 서로 다른 id를 갖지만 `change_set_id`, `dimension_version`,
 `changed_at`, actor와 reason이 같다. `(change_set_id, field_name)`은 UNIQUE이다. code와 value를
@@ -378,9 +392,9 @@ DELETE 트리거는 물리 삭제를 거부한다. AFTER INSERT/UPDATE 트리거
 실제 변경 필드마다 로그를 삽입한다. 로그 테이블의 BEFORE UPDATE/DELETE 트리거는 로그 변조를
 거부한다.
 
-AFTER 트리거는 한 행 변경에 사용할 change_set_id를 한 번 생성한다. `CURRENT_TIMESTAMP`는
-트랜잭션 동안 안정적이므로 같은 변경의 모든 로그와 Dimension updated_at이 같은 시각을 갖는다.
-로그 생성이나 이후 MasterCode 재합성이 실패하면 전체 트랜잭션이 롤백된다.
+AFTER 트리거는 한 행 변경에 사용할 change_set_id를 한 번 생성하고 NEW.updated_at을 모든 로그의
+changed_at으로 사용한다. 따라서 같은 변경의 모든 로그와 Dimension updated_at은 정확히 같은
+시각을 갖는다. 로그 생성이나 이후 MasterCode 재합성이 실패하면 전체 트랜잭션이 롤백된다.
 
 현재 단계에서는 마이그레이션 소유자와 애플리케이션 DB 역할을 분리하지 않는다. 따라서 DB
 계정이 직접 가짜 로그를 삽입하거나 소유자 권한으로 트리거를 우회할 수 있는 감사 변조 위험이
@@ -397,7 +411,7 @@ AFTER 트리거는 한 행 변경에 사용할 change_set_id를 한 번 생성�
 | Memory 환산 | `MemoryValue`에서 동일 규칙 사용 | 생성 컬럼과 UNIQUE |
 | 낙관적 검사 | If-Match 해석과 기대 version 전달 | 조건부 쓰기·트리거 검증 |
 | 행 잠금 | 유스케이스가 잠금 의도 결정 | `FOR UPDATE` 수행 |
-| 시간·version | SQL에 DB 시각과 증가를 명시 | BEFORE 트리거가 정확성 검증 |
+| 시간·version | 잠금 후 DB 시각을 한 번 얻어 SQL에 증가와 함께 명시 | BEFORE 트리거가 컨텍스트·단조성 검증 |
 | 감사 주체·이유 | 신뢰된 컨텍스트 설정 | 트리거가 존재·형식 검증 |
 | 로그 생성 | 직접 조립하지 않음 | AFTER 트리거가 필드별 생성 |
 | 삭제·복원 | 유스케이스와 오류 결정 | CHECK, 트리거, FK 최종 보장 |
@@ -471,6 +485,7 @@ AFTER 트리거는 한 행 변경에 사용할 change_set_id를 한 번 생성�
 | stale If-Match | 412, Dimension·로그·MasterCode 변화 없음 |
 | 참조 중 삭제 | 409, 삭제 로그 없음 |
 | 삭제 성공 | version +1, DELETED false→true 로그 1개 |
+| tombstone 조회 | 현재 삭제 version과 같은 ETag 반환, 상태 변화 없음 |
 | 복원 성공 | version +1, DELETED true→false 로그 1개 |
 
 ## 16. 인덱스 기준
@@ -505,7 +520,7 @@ actor, operation, 기간 단독 인덱스는 관리자 로그 조회 티켓에�
 별도 티켓은 다음 책임을 가진다.
 
 - #16: 인증된 actor와 DB 트랜잭션 컨텍스트
-- #17: Dimension 논리 삭제·복원과 로그
+- #17: Dimension tombstone 조회, 논리 삭제·복원과 로그
 - #18: 관리자용 DimensionLog 조회 API
 - #19: DB 역할 분리와 감사 로그 변조 방지 강화
 
