@@ -45,7 +45,7 @@ Dimension 타입은 운영 중 추가할 수 있는 데이터가 아니라 코�
 | 필드 | PostgreSQL 타입 | nullable | 기본값 | 유일성·제약 | 변경 정책 |
 | --- | --- | --- | --- | --- | --- |
 | `id` | `UUID` | 아니요 | `uuidv7()` | PK | 변경 금지 |
-| `code` | `VARCHAR(32)` | 아니요 | 없음 | 테이블 내 UNIQUE, `^[A-Z0-9]{1,32}$` | 조건부 PATCH로 변경 가능 |
+| `code` | `VARCHAR(32)` | 아니요 | 없음 | 테이블 내 UNIQUE, `^[A-Z0-9]{1,32}$`, `^N+$` 제외 | 조건부 PATCH로 변경 가능 |
 | `version` | `INTEGER` | 아니요 | `1` | `version >= 1` | 실제 상태 변경마다 정확히 1 증가 |
 | `created_at` | `TIMESTAMPTZ` | 아니요 | `statement_timestamp()` | DB 시각 | 변경 금지 |
 | `updated_at` | `TIMESTAMPTZ` | 아니요 | `statement_timestamp()` | DB 시각 | 실제 상태 변경 시 갱신 |
@@ -167,6 +167,8 @@ PB = amount * 1,000,000,000
 - 정규화 후 `A-Z`, `0-9`만 허용한다.
 - 길이는 1자 이상 32자 이하이다.
 - `_`, `-`, Unicode 문자와 그 밖의 특수문자는 거부한다.
+- 대문자 정규화 후 N으로만 이루어진 code는 길이와 관계없이 MasterCode의 "해당 없음" 전용
+  예약 영역이므로 거부한다. `N1`, `AN`, `NAN`처럼 다른 문자를 포함한 code는 허용한다.
 - 테이블 안에서 유일하지만 서로 다른 Dimension 테이블 사이의 동일한 code는 허용한다.
 - code는 value로부터 자동 파생하지 않는다.
 
@@ -178,6 +180,7 @@ PB = amount * 1,000,000,000
 각 Dimension 테이블에는 다음 유일성 규칙을 적용한다.
 
 - `UNIQUE(code)`
+- `CHECK (code !~ '^N+$')`
 - Year, Network, 문자열 Dimension: `UNIQUE(value)`
 - Memory: `UNIQUE(capacity_mb)`
 
@@ -271,14 +274,16 @@ repository는 행 잠금 뒤 획득한 하나의 mutation timestamp를 transacti
 ## 10. MasterCode 영향과 참조 무결성
 
 - value 변경은 MasterCode 합성 코드를 바꾸지 않는다.
-- code 변경은 영향을 받는 모든 MasterCode 재합성을 동기적으로 수행한다.
+- code 변경은 활성·삭제 상태를 가리지 않고 영향을 받는 모든 MasterCode 재합성을 동기적으로
+  수행한다.
 - Dimension code, version, updated_at과 모든 MasterCode 합성 코드는 한 DB 트랜잭션에서
   갱신한다.
 - 한 건이라도 유일성 충돌이나 DB 오류가 발생하면 Dimension, DimensionLog, MasterCode 변경을
   모두 롤백한다.
 - eventual consistency와 보상 트랜잭션을 사용하지 않는다.
 - 정확한 합성 순서와 모든 Dimension·MasterCode가 공유할 잠금 순서는 MasterCode 계약 이슈
-  #4에서 확정하며 구현 전에 재사용한다. 이 문서는 동기적 단일 트랜잭션 경계를 고정한다.
+  #4의 정본 `docs/domain/mastercode-data-contract.md`를 따른다. 이 문서는 동기적 단일
+  트랜잭션 경계를 고정한다.
 - concurrent task 사이에서 SQLAlchemy 세션을 공유하지 않는다.
 
 FK는 `ON DELETE RESTRICT`, `ON UPDATE RESTRICT`를 사용한다. UUID PK는 변경하지 않는다.
@@ -290,14 +295,14 @@ FK는 `ON DELETE RESTRICT`, `ON UPDATE RESTRICT`를 사용한다. UUID PK는 변
 - 물리 DELETE를 지원하지 않으며 DB BEFORE DELETE 트리거가 거부한다.
 - 삭제 명령은 타입별 `POST /dimensions/{collection}/{id}/delete`를 사용한다.
 - `If-Match`와 인증된 actor가 필수이고 reason은 선택이다.
-- Dimension 행을 잠그고 MasterCode 참조 존재 여부를 검사한다.
-- 현재 계약에서 MasterCode는 삭제 수명주기가 없으므로 하나라도 참조하면
-  `409 DIMENSION_IN_USE`이다.
+- Dimension 행을 잠그고 활성 MasterCode 참조 존재 여부를 검사한다.
+- 활성 MasterCode가 하나라도 참조하면 `409 DIMENSION_IN_USE`이다. 논리 삭제된 MasterCode의
+  참조는 Dimension 삭제를 차단하지 않는다.
 - 참조가 없을 때만 deleted_at과 updated_at을 같은 DB 시각으로 설정하고 version을 증가한다.
 - 삭제 로그 한 행은 `DELETED: false -> true`로 기록한다.
 
-MasterCode 생성도 참조할 Dimension을 잠그고 활성 상태를 확인해야 한다. 이 규칙은 참조 확인과
-동시 생성 사이의 경쟁 조건을 막는다.
+MasterCode 생성·참조 수정·복원도 non-null로 참조할 Dimension을 잠그고 활성 상태를 확인해야
+한다. 이 규칙은 참조 확인과 Dimension 삭제 사이의 경쟁 조건을 막는다.
 
 ### 11.2 복원
 
@@ -342,18 +347,28 @@ MasterCode 생성도 참조할 Dimension을 잠그고 활성 상태를 확인해
 | `old_value` | `JSONB` | 조건부 | operation 규칙 참조 |
 | `new_value` | `JSONB` | 조건부 | operation 규칙 참조 |
 | `reason` | `VARCHAR(500)` | 예 | 앞뒤 공백 제거, 빈 값은 `NULL` |
-| `actor_type` | `VARCHAR(6)` | 아니요 | `USER`, `SYSTEM` |
+| `actor_kind` | `VARCHAR(6)` | 아니요 | `HUMAN`, `SYSTEM` |
+| `actor_role` | `VARCHAR(11)` | 조건부 | `HUMAN`이면 `USER`, `ADMIN`, `SUPER_ADMIN`; `SYSTEM`이면 SQL `NULL` |
 | `actor_id` | `VARCHAR(255)` | 아니요 | 1~255자, 앞뒤 공백 없음 |
 | `changed_at` | `TIMESTAMPTZ` | 아니요 | 해당 Dimension mutation timestamp |
 
 같은 변경에서 생성한 로그는 서로 다른 id를 갖지만 `change_set_id`, `dimension_version`,
-`changed_at`, actor와 reason이 같다. `(change_set_id, field_name)`은 UNIQUE이다. code와 value를
-함께 바꾸면 같은 change set의 로그가 정확히 두 행 생성된다.
+`changed_at`, actor와 reason이 같다. `(dimension_id, change_set_id, field_name)`은 UNIQUE이다.
+code와 value를 함께 바꾸면 같은 change set의 로그가 정확히 두 행 생성된다.
 
 reason은 요청 전체의 선택적 자연어 메타데이터이다. Unicode, 대소문자와 내부 일반 공백을
 보존하고 앞뒤 공백만 제거한다. 빈 문자열과 공백 문자열은 `NULL`이 된다. 탭, 줄바꿈,
 제어문자는 거부한다. actor는 요청 body에서 받지 않고 신뢰된 인증·실행 컨텍스트에서 얻는다.
-익명 쓰기는 허용하지 않는다. `USER`와 `SYSTEM` 모두 안정적인 actor_id가 필수이다.
+`actor_kind`는 행위 주체의 종류이고 `actor_role`은 사람 actor가 변경 당시 보유한 권한 역할의
+스냅샷이다. 사람의 역할이 나중에 바뀌어도 기존 로그의 `actor_role`은 바꾸지 않는다. 익명 쓰기는
+허용하지 않으며 `HUMAN`과 `SYSTEM` 모두 안정적인 actor_id가 필수이다. DB CHECK는 `HUMAN`일 때
+세 역할 중 하나를 요구하고 `SYSTEM`일 때 `actor_role IS NULL`을 요구한다.
+
+`SYSTEM`은 사람 역할과 별개인 신뢰된 내부 super-user이다. 모든 Dimension 작업을 사람의 요청이나
+승인 없이 수행할 수 있지만 도메인 검증, ETag 검사, 참조 무결성, 잠금, 트랜잭션과 감사 로그를
+우회할 수 없다. 공개 API의 인증 주체는 `SYSTEM`을 주장할 수 없고 서버에 등록된 내부 실행
+identity만 사용할 수 있다. 사람이 승인하거나 직접 시작한 변경은 `HUMAN`과 당시 역할을 유지하며,
+사람의 개별 승인 없이 내부 자동 작업이 시작한 변경만 `SYSTEM`으로 기록한다.
 
 ### 12.3 로그 생성 규칙
 
@@ -392,9 +407,12 @@ DELETE 트리거는 물리 삭제를 거부한다. AFTER INSERT/UPDATE 트리거
 실제 변경 필드마다 로그를 삽입한다. 로그 테이블의 BEFORE UPDATE/DELETE 트리거는 로그 변조를
 거부한다.
 
-AFTER 트리거는 한 행 변경에 사용할 change_set_id를 한 번 생성하고 NEW.updated_at을 모든 로그의
-changed_at으로 사용한다. 따라서 같은 변경의 모든 로그와 Dimension updated_at은 정확히 같은
-시각을 갖는다. 로그 생성이나 이후 MasterCode 재합성이 실패하면 전체 트랜잭션이 롤백된다.
+애플리케이션 유스케이스는 mutation 트랜잭션을 시작할 때 UUIDv7 `change_set_id`를 정확히 한 번
+생성해 transaction-local 신뢰 컨텍스트에 설정한다. AFTER 트리거는 이 값을 생성하지 않고
+컨텍스트에서 읽으며 NEW.updated_at을 모든 로그의 changed_at으로 사용한다. 따라서 한 유스케이스가
+여러 Dimension과 MasterCode를 바꾸면 모든 로그가 같은 change set을 공유하고, 같은 mutation의
+로그와 원본 행 updated_at은 정확히 같은 시각을 갖는다. DimensionLog·MasterCodeLog 생성이나
+이후 MasterCode 재합성이 실패하면 전체 트랜잭션이 롤백된다.
 
 현재 비상업용 프로젝트의 보안 단계는 다음 경계를 전제로 한다.
 
@@ -472,6 +490,7 @@ changed_at으로 사용한다. 따라서 같은 변경의 모든 로그와 Dimen
 | code `"A_B"` | code에는 `_`를 허용하지 않음 |
 | code `"A-B"` | code에는 `-`를 허용하지 않음 |
 | code `" ABC "` | code에는 공백을 허용하지 않음 |
+| code `"N"`, `"NNN"`, `"nnnn"` | 정규화 후 N으로만 이루어진 MasterCode 전용 예약 패턴 |
 | 문자열 value `"대한민국"` | 문자열 value는 ASCII 정규형만 허용 |
 | 문자열 value `"A+B"` | 허용하지 않는 특수문자 |
 | 문자열 value `"A\tB"` | 탭은 자동 정규화하지 않음 |
@@ -510,9 +529,11 @@ Dimension 테이블:
 DimensionLog 테이블:
 
 - UUID PK
-- `(change_set_id, field_name)` UNIQUE
+- `(dimension_id, change_set_id, field_name)` UNIQUE
 - `(dimension_id, changed_at, id)` 변경 이력 인덱스
+- `(change_set_id, dimension_id, id)` change set 조회 인덱스
 
+마지막 인덱스는 변경 요청 한 건에서 발생한 DimensionLog를 change_set_id로 찾을 때 사용한다.
 actor, operation, 기간 단독 인덱스는 관리자 로그 조회 티켓에서 실제 필터와 실행 계획을 확인한
 후 추가한다.
 
@@ -524,18 +545,21 @@ actor, operation, 기간 단독 인덱스는 관리자 로그 조회 티켓에�
 | 티켓 | 구현 책임 | 직접 선행 티켓 |
 | --- | --- | --- |
 | #4 | 고정 Dimension 참조, MasterCode 합성 순서와 공유 잠금 계약 | #2 |
-| #22 | 간단한 API 인증, principal·actor_id 매핑과 관리자 권한 계약 | #2 |
+| #22 | 인증, 3단계 HUMAN 역할과 내부 SYSTEM super-user 계약 | #2, #4 |
 | #28 | 이 정본의 구현 책임표와 현재 보안 단계 갱신 | #2 |
-| #16 | 인증된 actor와 transaction-local DB 컨텍스트 구현 | #2, #22 |
-| #5 | Company 값 객체·테이블·생성·조회와 생성 로그의 첫 수직 슬라이스 | #16, #28 |
+| #16 | actor_kind·actor_role과 transaction-local 감사 컨텍스트 구현 | #2, #22 |
+| #27 | 역할 기반 권한 검사 구현 | #22, #16 |
+| #5 | 관리자·SYSTEM의 Company 생성, 전체 역할 조회와 생성 로그의 첫 수직 슬라이스 | #16, #27, #28 |
 | #24 | Model, Brand, Country, Category 생성·조회 확장 | #5 |
 | #25 | Year, Network 생성·조회 확장 | #5 |
 | #26 | Memory 생성·조회 확장 | #5 |
-| #6 | #4에서 확정한 Dimension 참조 구조에 따른 MasterCode 생성·조회 | #4, #24, #25, #26 |
-| #7 | If-Match 조건부 value 변경과 수정 로그 | #24, #25, #26 |
-| #8 | code 변경, value 동시 변경, MasterCode 원자적 재합성과 수정 로그 | #6, #7 |
-| #27 | 재사용 가능한 관리자 권한 검사 | #22, #16 |
+| #6 | 관리자·SYSTEM의 MasterCode 생성, 전체 역할 조회와 CREATE 로그 | #4, #16, #24, #25, #26, #27 |
+| #7 | 관리자·SYSTEM의 If-Match 조건부 value 변경과 수정 로그 | #24, #25, #26, #27 |
+| #8 | code 변경, 활성·삭제 MasterCode 재합성과 DimensionLog·MasterCodeLog | #6, #7, #27 |
+| #30 | MasterCode 참조 수정과 aggregate ETag | #6, #7, #27 |
 | #17 | Dimension tombstone 조회, 논리 삭제·복원과 로그 | #8, #27 |
+| #31 | MasterCode tombstone 조회, 논리 삭제·복원과 로그 | #17, #27, #30 |
+| #32 | USER의 MasterCode 요청, inline Dimension 생성과 관리자 승인 | #22, #27, #6, #30, #31 |
 | #18 | 관리자용 DimensionLog 조회 API | #17, #27 |
 
 #23의 PostgreSQL 역할 분리와 #19의 감사 로그 변조 방지 강화는 현재 위협 모델에서
