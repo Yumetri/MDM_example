@@ -20,6 +20,9 @@ Domain imports no framework, HTTP, or configuration code. Use cases depend on re
 validation, authentication, serialization, and use-case calls. Restrict `Depends` to API/composition
 boundaries. Keep `main.py` to assembly and registration. Never share sessions across concurrent tasks.
 
+Before changing files under `src/mdm/domain/`, read `src/mdm/domain/AGENTS.md` and the canonical
+domain contract it references. Treat those rules as additional instructions for that subtree.
+
 ## Required Commands
 
 Use `make setup`, `make db-up`, `make migrate`, and `make dev` locally. Apply `make format`; run
