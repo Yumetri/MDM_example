@@ -20,6 +20,11 @@ Domain imports no framework, HTTP, or configuration code. Use cases depend on re
 validation, authentication, serialization, and use-case calls. Restrict `Depends` to API/composition
 boundaries. Keep `main.py` to assembly and registration. Never share sessions across concurrent tasks.
 
+Before changing Dimension or DimensionLog behavior in any layer, including API, application,
+domain, infrastructure, or Alembic migrations, read `docs/domain/dimension-data-contract.md`.
+When changing files under `src/mdm/domain/`, also read `src/mdm/domain/AGENTS.md` and treat it as
+additional instructions for that subtree.
+
 ## Required Commands
 
 Use `make setup`, `make db-up`, `make migrate`, and `make dev` locally. Apply `make format`; run
