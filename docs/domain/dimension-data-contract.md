@@ -417,6 +417,10 @@ DELETE 트리거는 물리 삭제를 거부한다. AFTER INSERT/UPDATE 트리거
 실제 변경 필드마다 로그를 삽입한다. 로그 테이블의 BEFORE UPDATE/DELETE 트리거는 로그 변조를
 거부한다.
 
+#16은 실제 Dimension 테이블이나 업무 트리거를 만들지 않고, 후속 트리거가 호출할 PostgreSQL
+transaction-local 감사 컨텍스트 설정·검증 기반을 제공한다. 최초 실제 Dimension 테이블과
+BEFORE/AFTER 감사 트리거, 컨텍스트 없는 업무 write 거부는 #5가 통합해 검증한다.
+
 애플리케이션 유스케이스는 mutation 트랜잭션을 시작할 때 UUIDv7 `change_set_id`를 정확히 한 번
 생성해 transaction-local 신뢰 컨텍스트에 설정한다. AFTER 트리거는 이 값을 생성하지 않고
 컨텍스트에서 읽으며 NEW.updated_at을 모든 로그의 changed_at으로 사용한다. 따라서 한 유스케이스가
@@ -579,7 +583,7 @@ actor, operation, 기간 단독 인덱스는 관리자 로그 조회 티켓에�
 | #35 | user·role·JWT signer·opaque token·PasswordHasher 기반 | #22 | 없음 |
 | #36 | Bearer JWT verifier, HUMAN Principal과 운영 이벤트 기반 | #35 | #22 |
 | #47 | 두 정본의 HUMAN-only 실행 경계와 책임표 동기화 | #22 | #21, 완료 기록 #28 |
-| #16 | HUMAN actor와 transaction-local 감사 컨텍스트 구현 | #36 | #22, 두 도메인 정본 |
+| #16 | HUMAN actor와 transaction-local 감사 컨텍스트 설정·검증 기반(실제 업무 테이블·트리거 제외) | #36 | #22, 두 도메인 정본 |
 | #27 | HUMAN 역할 기반 권한 검사 구현 | #16 | #22 |
 | #5 | ADMIN·SUPER_ADMIN의 Company 생성, 모든 HUMAN 조회와 생성 로그의 첫 수직 슬라이스 | #27, #47 | #16 |
 | #24 | Model, Brand, Country, Category 생성·조회 확장 | #5 | Dimension 정본 |
