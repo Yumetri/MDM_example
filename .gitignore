@@ -6,5 +6,7 @@
 .pyrefly/
 .ruff_cache/
 .venv/
+/secrets/local/*
+!/secrets/local/.gitkeep
 __pycache__/
 *.py[cod]
