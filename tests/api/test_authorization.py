@@ -124,7 +124,7 @@ async def test_guard_returns_rfc_9457_403_for_a_denied_role() -> None:
     assert response.status_code == 403
     assert response.headers["content-type"].startswith("application/problem+json")
     assert response.json() == {
-        "type": "https://api.example.com/problems/authorization-denied",
+        "type": "/problems/authorization-denied",
         "title": "권한 없음",
         "status": 403,
         "detail": "현재 역할로는 이 작업을 수행할 수 없습니다.",
@@ -152,7 +152,7 @@ def test_authorized_operation_documents_bearer_401_and_authorization_403() -> No
     assert set(operation["responses"]["403"]["content"]) == {"application/problem+json"}
     example = operation["responses"]["403"]["content"]["application/problem+json"]["example"]
     assert example == {
-        "type": "https://api.example.com/problems/authorization-denied",
+        "type": "/problems/authorization-denied",
         "title": "권한 없음",
         "status": 403,
         "detail": "현재 역할로는 이 작업을 수행할 수 없습니다.",

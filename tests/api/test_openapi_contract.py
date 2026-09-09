@@ -97,7 +97,11 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
         {
             "name": "Health",
             "description": "서비스의 실행 상태와 요청 처리 준비 상태를 각각 확인합니다.",
-        }
+        },
+        {
+            "name": "Company Dimensions",
+            "description": "Company Dimension을 생성하고 활성 데이터를 조회합니다.",
+        },
     ]
 
     live = paths["/health/live"]["get"]
@@ -114,7 +118,7 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
     )
     assert ready["responses"]["503"]["description"] == "데이터베이스를 사용할 수 없습니다."
     assert ready["responses"]["503"]["content"]["application/problem+json"]["example"] == {
-        "type": "https://api.example.com/problems/service-unavailable",
+        "type": "/problems/service-unavailable",
         "title": "서비스를 사용할 수 없음",
         "status": 503,
         "detail": "데이터베이스 연결을 확인할 수 없어 현재 요청을 처리할 수 없습니다.",
@@ -151,7 +155,10 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
         name: field["description"]
         for name, field in schemas["ProblemDetails"]["properties"].items()
     } == {
-        "type": "문제 유형을 식별하는 안정적인 URI입니다.",
+        "type": (
+            "문제 유형을 식별하는 안정적인 상대 URI입니다. 현재 API origin을 기준으로 "
+            "해석하며, code는 서비스 전용 보조 식별자입니다."
+        ),
         "title": "문제를 짧게 요약한 사용자용 문구입니다.",
         "status": "해당 문제 발생에 대해 반환한 HTTP 상태 코드입니다.",
         "detail": "해당 문제 발생의 구체적인 원인을 설명하는 사용자용 문구입니다.",
@@ -159,6 +166,14 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
         "instance": "이 문제 발생을 식별하는 URI 참조입니다.",
         "violations": "입력값 검증 실패 시 유효하지 않은 필드 목록입니다.",
     }
+
+
+@pytest.mark.api
+def test_company_routes_are_registered_in_the_production_schema() -> None:
+    paths = app.openapi()["paths"]
+
+    assert set(paths["/dimensions/companies"]) >= {"get", "post"}
+    assert "get" in paths["/dimensions/companies/{company_id}"]
 
 
 @pytest.mark.api
@@ -173,4 +188,29 @@ def test_machine_readable_health_and_problem_fields_are_constrained() -> None:
     schemas = app.openapi()["components"]["schemas"]
 
     assert schemas["HealthResponse"]["properties"]["status"]["const"] == "ok"
-    assert schemas["ProblemDetails"]["properties"]["type"]["format"] == "uri"
+    assert schemas["ProblemDetails"]["properties"]["type"]["format"] == "uri-reference"
+    assert schemas["ProblemDetails"]["properties"]["instance"]["format"] == "uri-reference"
+    assert schemas["ProblemDetails"]["properties"]["instance"]["type"] == "string"
+    assert "anyOf" not in schemas["ProblemDetails"]["properties"]["instance"]
+    assert "instance" not in schemas["ProblemDetails"]["required"]
+
+
+@pytest.mark.api
+def test_company_examples_match_the_active_response_and_cursor_contract() -> None:
+    schema = app.openapi()
+    company_schema = schema["components"]["schemas"]["CompanyResponse"]
+    list_schema = schema["components"]["schemas"]["CompanyListResponse"]
+    parameters = schema["paths"]["/dimensions/companies"]["get"]["parameters"]
+    cursor_parameter = next(item for item in parameters if item["name"] == "cursor")
+
+    assert company_schema["properties"]["deleted_at"]["type"] == "null"
+    assert company_schema["example"]["deleted_at"] is None
+    assert list_schema["example"]["items"][0]["deleted_at"] is None
+    assert company_schema["example"]["code"] == "SAM01"
+    assert company_schema["example"]["id"] == "01a083c3-88e8-7123-8000-000000000001"
+    assert company_schema["example"]["created_at"].endswith("Z")
+    assert list_schema["example"]["next_cursor"] == cursor_parameter["schema"]["examples"][0]
+    assert (
+        list_schema["properties"]["next_cursor"]["examples"][0]
+        == (cursor_parameter["schema"]["examples"][0])
+    )

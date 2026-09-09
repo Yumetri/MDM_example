@@ -430,7 +430,7 @@ BEFORE DELETE 트리거는 물리 삭제를 거부한다.
 
 | 상황 | HTTP | 안정적인 code |
 | --- | --- | --- |
-| 인증되지 않은 쓰기 | 401 | `AUTHENTICATION_REQUIRED` |
+| 누락·형식·서명·claim·시간 검증에 실패한 Bearer access token | 401 | `INVALID_ACCESS_TOKEN` |
 | 인증됐지만 역할상 허용되지 않은 작업 | 403 | `AUTHORIZATION_DENIED` |
 | 없는 또는 일반 경로에서 삭제된 MasterCode | 404 | `MASTER_CODE_NOT_FOUND` |
 | 생성·참조 수정에서 없거나 삭제된 Dimension 참조 | 422 | `INVALID_DIMENSION_REFERENCE` |

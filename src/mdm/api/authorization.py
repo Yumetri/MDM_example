@@ -10,7 +10,7 @@ from mdm.application.auth import HumanPrincipal
 from mdm.application.authorization import AuthorizationAction, AuthorizationPolicy
 
 AUTHORIZATION_DENIED_EXAMPLE = {
-    "type": "https://api.example.com/problems/authorization-denied",
+    "type": "/problems/authorization-denied",
     "title": "권한 없음",
     "status": 403,
     "detail": "현재 역할로는 이 작업을 수행할 수 없습니다.",

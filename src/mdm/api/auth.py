@@ -10,7 +10,7 @@ from mdm.api.schemas import ProblemDetails
 from mdm.application.auth import AuthenticateHumanPrincipal, HumanPrincipal
 
 INVALID_ACCESS_TOKEN_EXAMPLE = {
-    "type": "https://api.example.com/problems/invalid-access-token",
+    "type": "/problems/invalid-access-token",
     "title": "유효하지 않은 액세스 토큰",
     "status": 401,
     "detail": "유효한 Bearer 액세스 토큰이 필요합니다.",

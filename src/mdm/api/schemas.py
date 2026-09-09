@@ -2,7 +2,8 @@
 
 from typing import Annotated, Literal
 
-from pydantic import AnyUrl, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic.json_schema import SkipJsonSchema
 
 
 class HealthResponse(BaseModel):
@@ -38,7 +39,7 @@ class FieldViolation(BaseModel):
 
     field: Annotated[
         str,
-        Field(description="유효하지 않은 입력값의 위치입니다.", examples=["body.name"]),
+        Field(description="유효하지 않은 입력값의 위치입니다.", examples=["body.code"]),
     ]
     message: Annotated[
         str,
@@ -55,7 +56,7 @@ class ProblemDetails(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "type": "https://api.example.com/problems/service-unavailable",
+                "type": "/problems/service-unavailable",
                 "title": "서비스를 사용할 수 없음",
                 "status": 503,
                 "detail": "필수 의존 서비스를 사용할 수 없습니다.",
@@ -66,10 +67,15 @@ class ProblemDetails(BaseModel):
     )
 
     type: Annotated[
-        AnyUrl,
+        str,
         Field(
-            description="문제 유형을 식별하는 안정적인 URI입니다.",
-            examples=["https://api.example.com/problems/service-unavailable"],
+            pattern=r"^/problems/[a-z0-9]+(?:-[a-z0-9]+)*$",
+            description=(
+                "문제 유형을 식별하는 안정적인 상대 URI입니다. 현재 API origin을 기준으로 "
+                "해석하며, code는 서비스 전용 보조 식별자입니다."
+            ),
+            examples=["/problems/service-unavailable"],
+            json_schema_extra={"format": "uri-reference"},
         ),
     ]
     title: Annotated[
@@ -98,13 +104,17 @@ class ProblemDetails(BaseModel):
         ),
     ]
     instance: Annotated[
-        str | None,
-        Field(description="이 문제 발생을 식별하는 URI 참조입니다.", examples=["/health/ready"]),
+        str | SkipJsonSchema[None],
+        Field(
+            description="이 문제 발생을 식별하는 URI 참조입니다.",
+            examples=["/health/ready"],
+            json_schema_extra={"format": "uri-reference"},
+        ),
     ] = None
     violations: Annotated[
         list[FieldViolation] | None,
         Field(
             description="입력값 검증 실패 시 유효하지 않은 필드 목록입니다.",
-            examples=[[{"field": "body.name", "message": "필수 필드입니다."}]],
+            examples=[[{"field": "body.code", "message": "필수 필드입니다."}]],
         ),
     ] = None

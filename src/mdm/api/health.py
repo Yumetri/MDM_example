@@ -8,7 +8,7 @@ from mdm.api.schemas import HealthResponse, ProblemDetails
 from mdm.application.health import ReadinessCheck
 
 READINESS_UNAVAILABLE_EXAMPLE = {
-    "type": "https://api.example.com/problems/service-unavailable",
+    "type": "/problems/service-unavailable",
     "title": "서비스를 사용할 수 없음",
     "status": 503,
     "detail": "데이터베이스 연결을 확인할 수 없어 현재 요청을 처리할 수 없습니다.",
