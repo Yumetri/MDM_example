@@ -42,7 +42,10 @@ class FieldViolation(BaseModel):
     ]
     message: Annotated[
         str,
-        Field(description="입력값 검증 실패 원인을 설명하는 사용자용 메시지입니다."),
+        Field(
+            description="입력값 검증 실패 원인을 설명하는 사용자용 메시지입니다.",
+            examples=["필수 필드입니다."],
+        ),
     ]
 
 
@@ -64,11 +67,17 @@ class ProblemDetails(BaseModel):
 
     type: Annotated[
         AnyUrl,
-        Field(description="문제 유형을 식별하는 안정적인 URI입니다."),
+        Field(
+            description="문제 유형을 식별하는 안정적인 URI입니다.",
+            examples=["https://api.example.com/problems/service-unavailable"],
+        ),
     ]
     title: Annotated[
         str,
-        Field(description="문제를 짧게 요약한 사용자용 문구입니다."),
+        Field(
+            description="문제를 짧게 요약한 사용자용 문구입니다.",
+            examples=["서비스를 사용할 수 없음"],
+        ),
     ]
     status: Annotated[
         int,
@@ -76,17 +85,26 @@ class ProblemDetails(BaseModel):
     ]
     detail: Annotated[
         str,
-        Field(description="해당 문제 발생의 구체적인 원인을 설명하는 사용자용 문구입니다."),
+        Field(
+            description="해당 문제 발생의 구체적인 원인을 설명하는 사용자용 문구입니다.",
+            examples=["필수 의존 서비스를 사용할 수 없습니다."],
+        ),
     ]
     code: Annotated[
         str,
-        Field(description="안정적이고 기계 판독 가능한 서비스 오류 코드입니다."),
+        Field(
+            description="안정적이고 기계 판독 가능한 서비스 오류 코드입니다.",
+            examples=["SERVICE_UNAVAILABLE"],
+        ),
     ]
     instance: Annotated[
         str | None,
-        Field(description="이 문제 발생을 식별하는 URI 참조입니다."),
+        Field(description="이 문제 발생을 식별하는 URI 참조입니다.", examples=["/health/ready"]),
     ] = None
     violations: Annotated[
         list[FieldViolation] | None,
-        Field(description="입력값 검증 실패 시 유효하지 않은 필드 목록입니다."),
+        Field(
+            description="입력값 검증 실패 시 유효하지 않은 필드 목록입니다.",
+            examples=[[{"field": "body.name", "message": "필수 필드입니다."}]],
+        ),
     ] = None

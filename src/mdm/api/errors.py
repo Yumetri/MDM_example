@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from mdm.api.schemas import FieldViolation, ProblemDetails
 from mdm.application.auth import InvalidAccessToken
+from mdm.application.authorization import AuthorizationDenied
 from mdm.application.health import ReadinessUnavailable
 
 
@@ -37,6 +38,20 @@ async def invalid_access_token_handler(request: Request, exc: Exception) -> JSON
             instance=request.url.path,
         ),
         headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+async def authorization_denied_handler(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, AuthorizationDenied)
+    return problem_response(
+        ProblemDetails(
+            type="https://api.example.com/problems/authorization-denied",
+            title="권한 없음",
+            status=403,
+            detail="현재 역할로는 이 작업을 수행할 수 없습니다.",
+            code="AUTHORIZATION_DENIED",
+            instance=request.url.path,
+        )
     )
 
 
