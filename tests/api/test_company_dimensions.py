@@ -343,6 +343,19 @@ def test_company_openapi_is_consumer_oriented_and_documents_security_and_errors(
     assert {"401", "403", "409", "422", "503"} <= set(create["responses"])
     assert {"401", "404", "422", "503"} <= set(detail["responses"])
     assert "503" in listing["responses"]
+    conflict_examples = create["responses"]["409"]["content"]["application/problem+json"][
+        "examples"
+    ]
+    assert conflict_examples["codeConflict"]["value"]["violations"] == [
+        {"field": "body.code", "message": "이미 사용 중인 값입니다."}
+    ]
+    assert conflict_examples["valueConflict"]["value"]["violations"] == [
+        {"field": "body.value", "message": "이미 사용 중인 값입니다."}
+    ]
+    assert conflict_examples["multipleConflicts"]["value"]["violations"] == [
+        {"field": "body.code", "message": "이미 사용 중인 값입니다."},
+        {"field": "body.value", "message": "이미 사용 중인 값입니다."},
+    ]
     assert create["responses"]["201"]["headers"]["ETag"]["schema"]["example"] == '"1"'
     assert detail["responses"]["200"]["headers"]["ETag"]["schema"]["example"] == '"1"'
     assert listing["parameters"][0]["name"] in {"cursor", "limit"}

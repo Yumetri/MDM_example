@@ -187,6 +187,9 @@ CONFLICT_RESPONSE: dict[str, Any] = {
                         "status": 409,
                         "detail": "정규화된 Company 대표 코드가 이미 사용 중입니다.",
                         "code": "DIMENSION_CODE_CONFLICT",
+                        "violations": [
+                            {"field": "body.code", "message": "이미 사용 중인 값입니다."}
+                        ],
                     },
                 },
                 "valueConflict": {
@@ -197,6 +200,9 @@ CONFLICT_RESPONSE: dict[str, Any] = {
                         "status": 409,
                         "detail": "정규화된 Company 값이 이미 사용 중입니다.",
                         "code": "DIMENSION_VALUE_CONFLICT",
+                        "violations": [
+                            {"field": "body.value", "message": "이미 사용 중인 값입니다."}
+                        ],
                     },
                 },
                 "multipleConflicts": {
@@ -207,6 +213,10 @@ CONFLICT_RESPONSE: dict[str, Any] = {
                         "status": 409,
                         "detail": "정규화된 Company 대표 코드와 값이 모두 이미 사용 중입니다.",
                         "code": "DIMENSION_MULTIPLE_CONFLICTS",
+                        "violations": [
+                            {"field": "body.code", "message": "이미 사용 중인 값입니다."},
+                            {"field": "body.value", "message": "이미 사용 중인 값입니다."},
+                        ],
                     },
                 },
             },
