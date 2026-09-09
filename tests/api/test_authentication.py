@@ -184,3 +184,8 @@ def test_protected_operation_documents_bearer_auth_and_problem_details() -> None
     example = operation["responses"]["401"]["content"]["application/problem+json"]["example"]
     assert example["code"] == "INVALID_ACCESS_TOKEN"
     assert "instance" not in example
+    assert operation["responses"]["401"]["headers"]["WWW-Authenticate"] == {
+        "description": "Bearer 인증이 필요함을 나타내는 표준 HTTP challenge입니다.",
+        "schema": {"type": "string", "const": "Bearer"},
+        "example": "Bearer",
+    }

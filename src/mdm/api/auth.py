@@ -20,6 +20,13 @@ INVALID_ACCESS_TOKEN_EXAMPLE = {
 INVALID_ACCESS_TOKEN_RESPONSE: dict[str, Any] = {
     "model": ProblemDetails,
     "description": "Bearer 액세스 토큰이 없거나 유효하지 않습니다.",
+    "headers": {
+        "WWW-Authenticate": {
+            "description": "Bearer 인증이 필요함을 나타내는 표준 HTTP challenge입니다.",
+            "schema": {"type": "string", "const": "Bearer"},
+            "example": "Bearer",
+        }
+    },
     "content": {
         "application/problem+json": {
             "schema": {"$ref": "#/components/schemas/ProblemDetails"},
