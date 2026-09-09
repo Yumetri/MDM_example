@@ -11,7 +11,7 @@ from mdm.application.bootstrap import (
     BootstrapStateConflict,
     BootstrapSuperAdmin,
 )
-from mdm.domain.auth import AuthInvariantError
+from mdm.domain.auth import AuthInvariantError, PlainPassword
 from mdm.infrastructure.database import create_engine, create_session_factory
 from mdm.infrastructure.passwords import build_password_hasher
 from mdm.infrastructure.repositories.bootstrap import SqlAlchemyBootstrapSuperAdminRepository
@@ -61,8 +61,12 @@ def main(
         name = input_reader("Name: ")
         with warnings.catch_warnings():
             warnings.simplefilter("error", getpass.GetPassWarning)
-            password = password_reader("Password: ")
-        outcome = asyncio.run(invoke_runner(email, name, password))
+            password = PlainPassword(password_reader("Password: "))
+            password_confirmation = PlainPassword(password_reader("Confirm password: "))
+        if password != password_confirmation:
+            print("BOOTSTRAP_PASSWORD_CONFIRMATION_MISMATCH", file=sys.stderr)
+            return 2
+        outcome = asyncio.run(invoke_runner(email, name, password.reveal()))
     except BootstrapStateConflict:
         print("BOOTSTRAP_STATE_CONFLICT", file=sys.stderr)
         return 1

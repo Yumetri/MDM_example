@@ -12,7 +12,9 @@ from mdm.infrastructure import cli
 class FakeTerminal:
     def __init__(self) -> None:
         self.text_answers = iter(["admin@example.net", "최초 관리자"])
-        self.password = "correct horse battery staple"
+        self.password_answers = iter(
+            ["correct horse battery staple", "correct horse battery staple"]
+        )
         self.prompts: list[str] = []
 
     def read_text(self, prompt: str) -> str:
@@ -21,7 +23,7 @@ class FakeTerminal:
 
     def read_password(self, prompt: str) -> str:
         self.prompts.append(prompt)
-        return self.password
+        return next(self.password_answers)
 
 
 def _runner(
@@ -61,7 +63,7 @@ def test_cli_reads_identity_interactively_without_echoing_secrets(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert calls == [("admin@example.net", "최초 관리자", "correct horse battery staple")]
-    assert terminal.prompts == ["Email: ", "Name: ", "Password: "]
+    assert terminal.prompts == ["Email: ", "Name: ", "Password: ", "Confirm password: "]
     assert "admin@example.net" not in captured.out + captured.err
     assert "correct horse battery staple" not in captured.out + captured.err
 
@@ -149,14 +151,72 @@ def test_cli_refuses_noninteractive_password_input(
 
 
 @pytest.mark.unit
+def test_cli_rejects_password_confirmation_mismatch_before_runner(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    terminal = FakeTerminal()
+    terminal.password_answers = iter(
+        ["correct horse battery staple", "different horse battery staple"]
+    )
+    runner, calls = _runner(BootstrapOutcome.CREATED)
+
+    exit_code = cli.main(
+        ["auth", "bootstrap-super-admin"],
+        input_reader=terminal.read_text,
+        password_reader=terminal.read_password,
+        runner=runner,
+        terminal_check=lambda: True,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert calls == []
+    assert captured.out == ""
+    assert captured.err.strip() == "BOOTSTRAP_PASSWORD_CONFIRMATION_MISMATCH"
+    assert "correct horse battery staple" not in captured.err
+    assert "different horse battery staple" not in captured.err
+
+
+@pytest.mark.unit
+def test_cli_accepts_canonically_equivalent_password_confirmation(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    terminal = FakeTerminal()
+    terminal.password_answers = iter(
+        ["correct horse cafe\u0301 password", "correct horse caf\u00e9 password"]
+    )
+    runner, calls = _runner(BootstrapOutcome.CREATED)
+
+    exit_code = cli.main(
+        ["auth", "bootstrap-super-admin"],
+        input_reader=terminal.read_text,
+        password_reader=terminal.read_password,
+        runner=runner,
+        terminal_check=lambda: True,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert calls == [("admin@example.net", "최초 관리자", "correct horse caf\u00e9 password")]
+    assert "correct horse cafe\u0301 password" not in captured.out + captured.err
+    assert "correct horse caf\u00e9 password" not in captured.out + captured.err
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("unsafe_prompt_number", [1, 2])
 def test_cli_refuses_password_when_terminal_echo_cannot_be_disabled(
+    unsafe_prompt_number: int,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     terminal = FakeTerminal()
     runner, calls = _runner(BootstrapOutcome.CREATED)
+    prompt_number = 0
 
     def unsafe_password_reader(prompt: str) -> str:
-        warnings.warn("Password input may be echoed.", getpass.GetPassWarning, stacklevel=2)
+        nonlocal prompt_number
+        prompt_number += 1
+        if prompt_number == unsafe_prompt_number:
+            warnings.warn("Password input may be echoed.", getpass.GetPassWarning, stacklevel=2)
         return "must-not-be-used"
 
     exit_code = cli.main(
