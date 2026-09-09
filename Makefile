@@ -2,7 +2,7 @@ DEV_DATABASE_URL ?= postgresql+asyncpg://mdm:mdm-local@127.0.0.1:55432/mdm
 TEST_DATABASE_URL ?= postgresql+asyncpg://mdm:mdm-local@127.0.0.1:55432/mdm_test
 CI_COMPOSE_PROJECT_PREFIX ?= mdm-example-ci-check
 
-.PHONY: setup db-up db-ready db-down migrate migrate-test dev format lint typecheck \
+.PHONY: setup jwt-key-local db-up db-ready db-down migrate migrate-test dev format lint typecheck \
 	architecture test-unit test-integration test openapi openapi-check lock-check check \
 	ci-check install-hooks
 
@@ -12,6 +12,9 @@ setup: install-hooks
 
 install-hooks:
 	git config core.hooksPath .githooks
+
+jwt-key-local:
+	uv run python scripts/generate_local_jwt_keys.py
 
 db-up:
 	docker compose up -d db

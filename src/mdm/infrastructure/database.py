@@ -14,7 +14,7 @@ from mdm.application.health import ReadinessUnavailable
 
 def create_engine(database_url: str) -> AsyncEngine:
     """Create the application's async SQLAlchemy engine."""
-    return create_async_engine(database_url, pool_pre_ping=True)
+    return create_async_engine(database_url, pool_pre_ping=True, hide_parameters=True)
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
