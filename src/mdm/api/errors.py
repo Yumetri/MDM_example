@@ -1,5 +1,6 @@
 """Consistent translation of internal failures to public problem details."""
 
+from collections.abc import Mapping
 from typing import Any, cast
 
 from fastapi import Request
@@ -7,14 +8,35 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from mdm.api.schemas import FieldViolation, ProblemDetails
+from mdm.application.auth import InvalidAccessToken
 from mdm.application.health import ReadinessUnavailable
 
 
-def problem_response(problem: ProblemDetails) -> JSONResponse:
+def problem_response(
+    problem: ProblemDetails,
+    *,
+    headers: Mapping[str, str] | None = None,
+) -> JSONResponse:
     return JSONResponse(
         status_code=problem.status,
         content=problem.model_dump(mode="json", exclude_none=True),
         media_type="application/problem+json",
+        headers=headers,
+    )
+
+
+async def invalid_access_token_handler(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, InvalidAccessToken)
+    return problem_response(
+        ProblemDetails(
+            type="https://api.example.com/problems/invalid-access-token",
+            title="유효하지 않은 액세스 토큰",
+            status=401,
+            detail="유효한 Bearer 액세스 토큰이 필요합니다.",
+            code="INVALID_ACCESS_TOKEN",
+            instance=request.url.path,
+        ),
+        headers={"WWW-Authenticate": "Bearer"},
     )
 
 
@@ -25,7 +47,7 @@ async def readiness_unavailable_handler(request: Request, exc: Exception) -> JSO
             type="https://api.example.com/problems/service-unavailable",
             title="서비스를 사용할 수 없음",
             status=503,
-            detail=("필수 의존 서비스를 사용할 수 없어 현재 요청을 처리할 수 없습니다."),
+            detail="데이터베이스 연결을 확인할 수 없어 현재 요청을 처리할 수 없습니다.",
             code="SERVICE_UNAVAILABLE",
             instance=request.url.path,
         )

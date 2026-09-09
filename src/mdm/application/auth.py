@@ -1,7 +1,9 @@
-"""Application ports and sanitized authentication failures."""
+"""Application ports and sanitized authentication boundaries."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Protocol
+from datetime import datetime
+from typing import Literal, Never, Protocol
 from uuid import UUID
 
 from mdm.domain.auth import PlainPassword, UserRole
@@ -44,6 +46,35 @@ class AccessTokenClaims:
     jti: UUID
 
 
+@dataclass(frozen=True, slots=True)
+class HumanPrincipal:
+    """A trusted HUMAN identity derived only from a verified access token."""
+
+    user_id: UUID
+    role: UserRole
+
+
+@dataclass(frozen=True, slots=True)
+class OperationalEvent:
+    """A minimal, sanitized event envelope safe for operational output."""
+
+    name: Literal["INVALID_ACCESS_TOKEN"]
+    occurred_at: datetime
+    request_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.occurred_at.utcoffset() is None:
+            raise ValueError("operational event timestamp must be timezone-aware")
+        if self.request_id is not None and (
+            not self.request_id
+            or len(self.request_id) > 128
+            or not all(
+                character.isascii() and character.isprintable() for character in self.request_id
+            )
+        ):
+            raise ValueError("request_id must be a non-empty printable ASCII value")
+
+
 class PasswordHasher(Protocol):
     """Framework-independent password hashing boundary."""
 
@@ -76,3 +107,58 @@ class AccessTokenVerifier(Protocol):
     def verify(self, token: str, *, now: int) -> AccessTokenClaims:
         """Return trusted claims or raise InvalidAccessToken."""
         ...
+
+
+class OperationalEventSink(Protocol):
+    """Provider-neutral output boundary for sanitized operational events."""
+
+    def emit(self, event: OperationalEvent) -> None:
+        """Best-effort output of one event without credential material."""
+        ...
+
+
+class AuthenticateHumanPrincipal:
+    """Convert one optional Bearer credential into a trusted HUMAN principal."""
+
+    def __init__(
+        self,
+        verifier: AccessTokenVerifier,
+        event_sink: OperationalEventSink,
+        *,
+        clock: Callable[[], datetime],
+    ) -> None:
+        self._verifier = verifier
+        self._event_sink = event_sink
+        self._clock = clock
+
+    def execute(
+        self,
+        token: str | None,
+        *,
+        request_id: str | None = None,
+    ) -> HumanPrincipal:
+        """Authenticate without persistence and collapse every failure to one type."""
+        occurred_at = self._clock()
+        if occurred_at.utcoffset() is None:
+            raise ValueError("authentication clock must return a timezone-aware datetime")
+        if not token:
+            self._reject(occurred_at=occurred_at, request_id=request_id)
+
+        try:
+            claims = self._verifier.verify(token, now=int(occurred_at.timestamp()))
+        except InvalidAccessToken:
+            self._reject(occurred_at=occurred_at, request_id=request_id)
+        return HumanPrincipal(user_id=claims.user_id, role=claims.role)
+
+    def _reject(self, *, occurred_at: datetime, request_id: str | None) -> Never:
+        try:
+            self._event_sink.emit(
+                OperationalEvent(
+                    name="INVALID_ACCESS_TOKEN",
+                    occurred_at=occurred_at,
+                    request_id=request_id,
+                )
+            )
+        except Exception:
+            pass
+        raise InvalidAccessToken from None

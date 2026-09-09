@@ -11,7 +11,7 @@ READINESS_UNAVAILABLE_EXAMPLE = {
     "type": "https://api.example.com/problems/service-unavailable",
     "title": "서비스를 사용할 수 없음",
     "status": 503,
-    "detail": "필수 의존 서비스를 사용할 수 없어 현재 요청을 처리할 수 없습니다.",
+    "detail": "데이터베이스 연결을 확인할 수 없어 현재 요청을 처리할 수 없습니다.",
     "code": "SERVICE_UNAVAILABLE",
     "instance": "/health/ready",
 }
@@ -31,7 +31,7 @@ def build_health_router(readiness_check: ReadinessCheck) -> APIRouter:
         status_code=status.HTTP_200_OK,
         summary="서비스 프로세스 실행 여부 확인",
         description=(
-            "서비스 프로세스가 요청을 처리할 수 있으면 성공 응답을 반환합니다. "
+            "서비스 프로세스가 실행 중이며 생존 확인 요청에 응답하면 성공을 반환합니다. "
             "이 확인은 데이터베이스 상태와 무관합니다."
         ),
         responses={
@@ -59,8 +59,8 @@ def build_health_router(readiness_check: ReadinessCheck) -> APIRouter:
         status_code=status.HTTP_200_OK,
         summary="서비스 요청 처리 가능 여부 확인",
         description=(
-            "요청 처리에 필요한 의존 서비스의 상태를 확인합니다. 서비스를 트래픽에서 "
-            "일시적으로 제외해야 하면 503 응답을 반환합니다."
+            "요청 처리에 필요한 데이터베이스 연결 상태를 확인합니다. 데이터베이스를 사용할 수 없어 "
+            "서비스를 트래픽에서 일시적으로 제외해야 하면 503 응답을 반환합니다."
         ),
         responses={
             status.HTTP_200_OK: {
@@ -76,7 +76,7 @@ def build_health_router(readiness_check: ReadinessCheck) -> APIRouter:
             },
             status.HTTP_503_SERVICE_UNAVAILABLE: {
                 "model": ProblemDetails,
-                "description": "필수 의존 서비스를 사용할 수 없습니다.",
+                "description": "데이터베이스를 사용할 수 없습니다.",
                 "content": {
                     "application/problem+json": {
                         "schema": {"$ref": "#/components/schemas/ProblemDetails"},
