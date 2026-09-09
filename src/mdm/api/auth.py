@@ -15,7 +15,6 @@ INVALID_ACCESS_TOKEN_EXAMPLE = {
     "status": 401,
     "detail": "유효한 Bearer 액세스 토큰이 필요합니다.",
     "code": "INVALID_ACCESS_TOKEN",
-    "instance": "/dimensions/companies",
 }
 
 INVALID_ACCESS_TOKEN_RESPONSE: dict[str, Any] = {

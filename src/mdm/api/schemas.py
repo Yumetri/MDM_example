@@ -6,13 +6,13 @@ from pydantic import AnyUrl, BaseModel, ConfigDict, Field
 
 
 class HealthResponse(BaseModel):
-    """상태 확인 엔드포인트가 반환하는 현재 서비스 가용성입니다."""
+    """상태 확인 엔드포인트가 반환하는 결과입니다."""
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
                 "status": "ok",
-                "message": "서비스가 요청을 처리할 준비가 되었습니다.",
+                "message": "상태 확인이 성공했습니다.",
             }
         }
     )
@@ -34,7 +34,7 @@ class HealthResponse(BaseModel):
 
 
 class FieldViolation(BaseModel):
-    """API 사용자에게 반환하는 유효하지 않은 입력 필드 하나의 정보입니다."""
+    """입력값 검증에 실패한 필드 하나에 대한 정보입니다."""
 
     field: Annotated[
         str,
@@ -84,7 +84,7 @@ class ProblemDetails(BaseModel):
     ]
     instance: Annotated[
         str | None,
-        Field(description="해당 문제 발생 건을 식별하는 요청 경로 형식의 URI 참조입니다."),
+        Field(description="이 문제 발생을 식별하는 URI 참조입니다."),
     ] = None
     violations: Annotated[
         list[FieldViolation] | None,

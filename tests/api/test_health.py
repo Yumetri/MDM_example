@@ -60,7 +60,7 @@ async def test_readiness_returns_problem_details_when_database_is_unavailable() 
         "type": "https://api.example.com/problems/service-unavailable",
         "title": "서비스를 사용할 수 없음",
         "status": 503,
-        "detail": "필수 의존 서비스를 사용할 수 없어 현재 요청을 처리할 수 없습니다.",
+        "detail": "데이터베이스 연결을 확인할 수 없어 현재 요청을 처리할 수 없습니다.",
         "code": "SERVICE_UNAVAILABLE",
         "instance": "/health/ready",
     }

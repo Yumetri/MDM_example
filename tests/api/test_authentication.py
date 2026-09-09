@@ -181,7 +181,6 @@ def test_protected_operation_documents_bearer_auth_and_problem_details() -> None
         "description": "RS256 JWT 액세스 토큰을 Bearer 방식으로 전달합니다.",
     }
     assert set(operation["responses"]["401"]["content"]) == {"application/problem+json"}
-    assert (
-        operation["responses"]["401"]["content"]["application/problem+json"]["example"]["code"]
-        == "INVALID_ACCESS_TOKEN"
-    )
+    example = operation["responses"]["401"]["content"]["application/problem+json"]["example"]
+    assert example["code"] == "INVALID_ACCESS_TOKEN"
+    assert "instance" not in example

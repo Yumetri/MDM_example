@@ -109,22 +109,24 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
     )
     assert ready["summary"] == "서비스 요청 처리 가능 여부 확인"
     assert ready["description"] == (
-        "요청 처리에 필요한 의존 서비스의 상태를 확인합니다. 서비스를 트래픽에서 "
-        "일시적으로 제외해야 하면 503 응답을 반환합니다."
+        "요청 처리에 필요한 데이터베이스 연결 상태를 확인합니다. 데이터베이스를 사용할 수 없어 "
+        "서비스를 트래픽에서 일시적으로 제외해야 하면 503 응답을 반환합니다."
     )
-    assert ready["responses"]["503"]["description"] == "필수 의존 서비스를 사용할 수 없습니다."
+    assert ready["responses"]["503"]["description"] == "데이터베이스를 사용할 수 없습니다."
     assert ready["responses"]["503"]["content"]["application/problem+json"]["example"] == {
         "type": "https://api.example.com/problems/service-unavailable",
         "title": "서비스를 사용할 수 없음",
         "status": 503,
-        "detail": "필수 의존 서비스를 사용할 수 없어 현재 요청을 처리할 수 없습니다.",
+        "detail": "데이터베이스 연결을 확인할 수 없어 현재 요청을 처리할 수 없습니다.",
         "code": "SERVICE_UNAVAILABLE",
         "instance": "/health/ready",
     }
 
-    assert schemas["HealthResponse"]["description"] == (
-        "상태 확인 엔드포인트가 반환하는 현재 서비스 가용성입니다."
-    )
+    assert schemas["HealthResponse"]["description"] == "상태 확인 엔드포인트가 반환하는 결과입니다."
+    assert schemas["HealthResponse"]["example"] == {
+        "status": "ok",
+        "message": "상태 확인이 성공했습니다.",
+    }
     assert {
         name: field["description"]
         for name, field in schemas["HealthResponse"]["properties"].items()
@@ -133,7 +135,7 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
         "message": "현재 서비스 상태를 설명하는 사용자용 메시지입니다.",
     }
     assert schemas["FieldViolation"]["description"] == (
-        "API 사용자에게 반환하는 유효하지 않은 입력 필드 하나의 정보입니다."
+        "입력값 검증에 실패한 필드 하나에 대한 정보입니다."
     )
     assert {
         name: field["description"]
@@ -154,7 +156,7 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
         "status": "해당 문제 발생에 대해 반환한 HTTP 상태 코드입니다.",
         "detail": "해당 문제 발생의 구체적인 원인을 설명하는 사용자용 문구입니다.",
         "code": "안정적이고 기계 판독 가능한 서비스 오류 코드입니다.",
-        "instance": "해당 문제 발생 건을 식별하는 요청 경로 형식의 URI 참조입니다.",
+        "instance": "이 문제 발생을 식별하는 URI 참조입니다.",
         "violations": "입력값 검증 실패 시 유효하지 않은 필드 목록입니다.",
     }
 
