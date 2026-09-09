@@ -22,7 +22,7 @@ mutations after receiving the review result.
 For a base-branch review, compare the changes that would actually merge rather than diffing
 directly against the branch tip. Resolve the comparison ref to the branch's upstream when that
 upstream exists and is ahead of the local branch; otherwise use the local branch. Run
-`git merge-base HEAD <comparison-ref>`, then inspect `git diff <merge-base-sha>`. If the local
+`git merge-base HEAD <comparison-ref>`, then inspect `git diff <merge-base-sha> HEAD`. If the local
 branch cannot be resolved, try its configured upstream explicitly before reporting that the target
 is unavailable.
 
