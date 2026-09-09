@@ -5,6 +5,9 @@
 이 문서는 GitHub 이슈 #4에서 합의한 MasterCode의 구현 정본이다. 후속 구현 티켓은 이 계약을
 참조하며 서로 다른 규칙을 다시 정의하지 않는다.
 
+#28은 당시 Dimension 정본의 구현 책임표를 동기화한 완료 기록이다. 두 정본의 HUMAN-only 실행
+경계와 전체 scheduling DAG를 함께 맞추는 후속 동기화 책임은 #47이 가진다.
+
 이 문서가 정의하는 범위는 다음과 같다.
 
 - MasterCode 필드와 고정 Dimension 참조 구조
@@ -455,26 +458,27 @@ Dimension, MasterCode, 모든 로그와 요청 상태 전이를 롤백하며 요
 
 사람 사용자의 역할은 `USER`, `ADMIN`, `SUPER_ADMIN`의 세 단계이다.
 
-| 작업 | USER | ADMIN | SUPER_ADMIN |
-| --- | --- | --- | --- |
-| 활성 MasterCode 일반 조회 | 허용 | 허용 | 허용 |
-| 삭제 MasterCode tombstone 조회 | 금지 | 허용 | 허용 |
-| 생성·참조 수정·삭제 요청 제출 | 허용 | 해당 없음 | 해당 없음 |
-| MasterCode 직접 생성·참조 수정·삭제·복원 | 금지 | 허용 | 허용 |
-| USER가 제출한 변경 요청 승인·거절 | 금지 | 허용 | 허용 |
-| 하위 역할을 자신의 역할까지 승격 | 금지 | USER를 ADMIN으로 승격 | USER·ADMIN을 SUPER_ADMIN으로 승격 |
-| 시스템·역할 관리 | 금지 | 금지 | 허용 |
+| 작업 | USER | ADMIN | SUPER_ADMIN | SYSTEM |
+| --- | --- | --- | --- | --- |
+| 활성 MasterCode 일반 조회 | 허용 | 허용 | 허용 | runtime 미구현 |
+| 삭제 MasterCode tombstone 조회 | 금지 | 허용 | 허용 | runtime 미구현 |
+| 생성·참조 수정·삭제 요청 제출 | 허용 | 해당 없음 | 해당 없음 | runtime 미구현 |
+| MasterCode 직접 생성·참조 수정·삭제·복원 | 금지 | 허용 | 허용 | runtime 미구현 |
+| USER가 제출한 변경 요청 승인·거절 | 금지 | 허용 | 허용 | runtime 미구현 |
+| 하위 역할을 자신의 역할까지 승격 | 금지 | USER를 ADMIN으로 승격 | USER·ADMIN을 SUPER_ADMIN으로 승격 | runtime 미구현 |
+| 시스템·역할 관리 | 금지 | 금지 | 허용 | runtime 미구현 |
 
-`SYSTEM`은 사람 역할과 별개인 신뢰된 내부 super-user이다. 이 계약에 포함된 모든 조회와
-Dimension·MasterCode 생성·수정·삭제·복원을 사람의 요청이나 승인 없이 수행할 수 있다. 다만
-도메인 검증, ETag 검사, 유일성, 잠금 순서, 트랜잭션과 감사 로그는 우회할 수 없다. 공개 API의
-인증 주체는 `SYSTEM`을 주장할 수 없고, 서버에 등록된 내부 실행 identity만 사용할 수 있다.
-SYSTEM 로그는 `actor_kind=SYSTEM`, `actor_role=NULL`과 실제 내부 실행 주체의 `actor_id`를
-기록한다.
+`SYSTEM`은 사람 역할과 별개인 미래의 신뢰된 내부 자동 실행 주체를 위한 호환 계약이다. 도입될
+경우 이 계약의 조회와 Dimension·MasterCode 생성·수정·삭제·복원을 사람의 요청이나 승인 없이
+수행할 수 있지만 도메인 검증, ETag 검사, 유일성, 잠금 순서, 트랜잭션과 감사 로그는 우회할 수
+없다. 이때의 로그는 `actor_kind=SYSTEM`, `actor_role=NULL`과 안정적인 내부 `actor_id`를 기록한다.
 
-따라서 `actor_kind`는 권한 서열이 아니라 변경의 기원을 나타낸다. 사람이 직접 수행하거나 승인한
-변경과 그로부터 파생된 재합성은 `HUMAN` 및 당시 역할을 기록하고, 사람의 개별 승인 없이 내부
-자동 작업이 시작한 변경과 파생 작업은 `SYSTEM`을 기록한다.
+현재 승인된 production composition 계약은 #36이 검증한 JWT의 `HUMAN` Principal만 연결한다.
+SYSTEM identity, credential, Principal, actor factory, authorization 분기, 승인 우회와 실행
+경로는 등록하지 않는다. 공개 API의 body·query·header로 actor나 SYSTEM 여부를 주장해도
+신뢰하지 않는다. 따라서 현재 실행되는 직접 변경, 관리자 승인과 그 파생 재합성은 모두
+`HUMAN` 및 당시 역할을 기록한다. `actor_kind=SYSTEM`과 nullable `actor_role`은 미래 adapter를
+위한 DB·domain 표현이며 현재 권한을 부여하는 실행 경로가 아니다.
 
 일반 사용자의 요청 제출은 MasterCode 상태를 직접 바꾸지 않는다. 관리자가 승인한 시점에 실제
 변경 트랜잭션을 실행하며, 요청자와 승인자 및 원본 요청을 감사 가능하게 연결한다. 관리자가 직접
@@ -715,7 +719,9 @@ MasterCodeLog 테이블의 초기 인덱스는 다음과 같다.
 | review_message 501자 또는 탭·줄바꿈·제어문자 포함 | 422 `VALIDATION_ERROR`, 상태 변화 없음 |
 | 관리자 직접 변경 | 감사 로그 존재, 연결된 변경 요청 없음 |
 | HUMAN actor 로그 | actor_kind는 `HUMAN`, 변경 당시 역할은 actor_role에 저장되고 이후 역할 변경에도 불변 |
-| SYSTEM actor 로그 | actor_kind는 `SYSTEM`, actor_role은 SQL `NULL`; 승인 없이 변경하되 모든 무결성 규칙 적용 |
+| production에서 actor·SYSTEM 표시 위조 | 신뢰된 HUMAN Principal과 권한이 유지되고 SYSTEM actor가 생성되지 않음 |
+| production composition의 SYSTEM 실행 경로 검사 | identity·credential·Principal·factory·authorization 분기와 승인 우회가 없음 |
+| 미래 호환 SYSTEM actor 형식 | actor_kind는 `SYSTEM`, actor_role은 SQL `NULL`, 안정적인 actor_id 필수이며 모든 무결성 규칙 적용 |
 | HUMAN인데 actor_role 누락 또는 미지원 값 | DB CHECK가 거부하고 상태·로그 변화 없음 |
 | SYSTEM인데 actor_role 지정 | DB CHECK가 거부하고 상태·로그 변화 없음 |
 | no-op 직접 수정 | version·시각·로그 변화 없음 |
@@ -723,14 +729,23 @@ MasterCodeLog 테이블의 초기 인덱스는 다음과 같다.
 
 ### 17.6 후속 구현 티켓 매핑
 
-- #6은 17.1의 생성·조회·ETag 벡터, 17.2의 생성 입력·유일성 벡터와 17.4의 동시 MasterCode
-  생성을 구현한다.
-- #8은 17.1의 활성·삭제 MasterCode 재합성과 17.4의 생성 중 Dimension code 변경 경합, 서로
-  다른 Dimension code 동시 변경 및 fan-out 로그 실패 원자성을 구현한다.
-- #30은 17.3의 참조 수정·no-op·stale ETag와 같은 MasterCode의 동시 참조 수정을 구현한다.
-- #31은 17.3의 삭제·tombstone·복원 및 활성·삭제 MasterCode의 Dimension 삭제 차단 차이를
-  구현하고, #17·#30이 준비된 뒤 참조 수정과 대상 Dimension 삭제 경합을 교차 검증한다.
-- #32는 17.2의 tagged union 요청, 17.4의 승인·충돌·inline 생성 동시성과 17.5의 변경 요청 감사
-  연결을 구현한다.
-- #22, #16과 #27은 역할별 접근, HUMAN·SYSTEM 실행 주체, transaction-local 감사 컨텍스트와
-  401·403 벡터를 구현 티켓이 공통으로 사용할 수 있게 정의·구현한다.
+`직접 선행 티켓`은 전이적으로 중복되는 간선을 제거한 scheduling DAG이며, 이미 보장된 기반이나
+단순 소비하는 정본은 `비차단 계약 참조`로 분리한다.
+
+| 티켓 | 구현할 주요 벡터 | 직접 선행 티켓 | 비차단 계약 참조 |
+| --- | --- | --- | --- |
+| #16 | 검증된 HUMAN Principal의 actor·transaction-local 감사 컨텍스트 | #36 | #22, 두 도메인 정본 |
+| #27 | HUMAN 역할별 접근과 401·403 경계, SYSTEM runtime 제외 | #16 | #22 |
+| #6 | 17.1 생성·조회·ETag, 17.2 입력·유일성과 17.4 동시 생성 | #24, #25, #26 | #16, #27 |
+| #7 | Dimension value 변경과 MasterCode code 불변·aggregate ETag 갱신 | #24, #25, #26 | #16, #27 |
+| #8 | 17.1 재합성, 17.4 code 변경 경합과 fan-out 원자성 | #6, #7 | #16, #27 |
+| #30 | 17.3 참조 수정·no-op·stale ETag와 동시 참조 수정 | #6, #7 | #16, #27 |
+| #17 | 17.3 활성 MasterCode 참조의 Dimension 삭제 차단과 삭제 행 참조 보존 | #8 | #27 |
+| #31 | 17.3 삭제·tombstone·복원과 참조 수정·Dimension 삭제 경합 | #17, #30 | #27 |
+| #32 | 17.2 tagged union 요청, 17.4 승인 동시성과 17.5 감사 연결 | #31 | #22, #27 |
+| #18 | HUMAN 관리자용 DimensionLog·MasterCodeLog 조회 | #32 | #27 |
+
+현재 위 티켓의 actor·권한 실행 경로는 HUMAN으로 고정한다. M2~M5는 #35 signer와 #36 verifier를
+사용하는 로컬·CI acceptance increment이며 #37 login 전에는 실제 사용자가 credential을 얻는
+production 경로가 없다. 이 구간만 단독 배포하거나 운영 사용 가능하다고 선언하지 않고, 임시
+무인증·production test-token·가짜 SYSTEM 경로를 만들지 않는다.

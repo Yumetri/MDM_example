@@ -5,6 +5,9 @@
 이 문서는 GitHub 이슈 #2에서 합의한 Dimension 및 DimensionLog의 구현 정본이다. 후속 구현
 티켓은 이 계약을 참조하며 서로 다른 규칙을 다시 정의하지 않는다.
 
+#28은 당시 Dimension 구현 책임표와 비상업용 감사 보안 단계를 동기화한 완료 기록이다. 이후
+HUMAN-only 실행 경계와 Dimension·MasterCode 전체 scheduling DAG의 동기화 책임은 #47이 가진다.
+
 이 문서가 정의하는 범위는 다음과 같다.
 
 - 고정 Dimension 타입과 타입별 필드
@@ -364,11 +367,18 @@ reason은 요청 전체의 선택적 자연어 메타데이터이다. Unicode, �
 허용하지 않으며 `HUMAN`과 `SYSTEM` 모두 안정적인 actor_id가 필수이다. DB CHECK는 `HUMAN`일 때
 세 역할 중 하나를 요구하고 `SYSTEM`일 때 `actor_role IS NULL`을 요구한다.
 
-`SYSTEM`은 사람 역할과 별개인 신뢰된 내부 super-user이다. 모든 Dimension 작업을 사람의 요청이나
-승인 없이 수행할 수 있지만 도메인 검증, ETag 검사, 참조 무결성, 잠금, 트랜잭션과 감사 로그를
-우회할 수 없다. 공개 API의 인증 주체는 `SYSTEM`을 주장할 수 없고 서버에 등록된 내부 실행
-identity만 사용할 수 있다. 사람이 승인하거나 직접 시작한 변경은 `HUMAN`과 당시 역할을 유지하며,
-사람의 개별 승인 없이 내부 자동 작업이 시작한 변경만 `SYSTEM`으로 기록한다.
+`SYSTEM`은 미래의 신뢰된 내부 자동 실행 주체를 위한 호환 계약이다. 도입될 경우 사람의 요청이나
+승인 없이 Dimension 작업을 수행할 수 있지만 도메인 검증, ETag 검사, 참조 무결성, 잠금,
+트랜잭션과 감사 로그를 우회할 수 없다. 이때만 사람의 개별 승인 없이 내부 자동 작업이 시작한
+변경을 `SYSTEM`으로 기록한다.
+
+현재 승인된 production composition 계약은 #36이 검증한 JWT에서 만든 `HUMAN` Principal만
+actor로 변환한다. SYSTEM identity, credential, Principal, actor factory, authorization 분기,
+승인 우회와 실행 경로는 등록하지 않는다. 공개 API의 body·query·header로 `actor_kind`,
+`actor_role`, `actor_id` 또는 SYSTEM 여부를 주장해도 신뢰하지 않는다. 사람이 직접 수행하거나
+승인한 변경과 그 파생 변경은 항상 `HUMAN`과 당시 역할을 기록한다. `actor_kind=SYSTEM`, nullable
+`actor_role`과 필수 `actor_id` 형식은 미래 adapter 추가 때 기존 DB·domain 계약을 바꾸지 않기
+위한 표현 경계이다.
 
 ### 12.3 로그 생성 규칙
 
@@ -416,7 +426,9 @@ DELETE 트리거는 물리 삭제를 거부한다. AFTER INSERT/UPDATE 트리거
 
 현재 비상업용 프로젝트의 보안 단계는 다음 경계를 전제로 한다.
 
-- 정상 애플리케이션·배치 쓰기 경로에서는 트리거가 DimensionLog를 자동 생성한다.
+- 현재 production에 연결된 정상 애플리케이션 쓰기 경로는 검증된 `HUMAN` actor만 사용하며
+  트리거가 DimensionLog를 자동 생성한다.
+- 미래 SYSTEM adapter가 추가되더라도 같은 트리거·무결성·감사 경계를 사용해야 한다.
 - 로그 테이블의 BEFORE 트리거는 일반 UPDATE·DELETE로 기존 로그를 바꾸거나 지우는 작업을
   거부한다.
 - FastAPI 런타임과 런타임 DB credential은 현재 신뢰 경계 안에 둔다.
@@ -426,6 +438,20 @@ DELETE 트리거는 물리 삭제를 거부한다. AFTER INSERT/UPDATE 트리거
 가짜 로그 삽입이나 트리거 우회까지 방어하는 tamper-proof 감사 저장소는 아니다. 상업 운영,
 다중 운영자, 외부 DB 접근 또는 런타임 DB credential 침해를 위협 모델에 포함할 때 역할 분리,
 로그 DML 권한 회수와 `SECURITY DEFINER` 같은 강화를 새 보안 작업으로 재검토한다.
+
+### 12.5 현재 production 권한 경계
+
+현재 실행 가능한 actor는 HUMAN뿐이다. SYSTEM 열은 미래 호환 표현의 현재 실행 상태를 명확히
+보이기 위한 것이며 권한을 부여하는 production 경로가 있다는 뜻이 아니다.
+
+| 작업 | USER | ADMIN | SUPER_ADMIN | SYSTEM |
+| --- | --- | --- | --- | --- |
+| 활성 Dimension 일반 조회 | 허용 | 허용 | 허용 | runtime 미구현 |
+| Dimension 직접 생성·수정·삭제·복원 | 금지 | 허용 | 허용 | runtime 미구현 |
+| tombstone·감사 로그 조회 | 금지 | 허용 | 허용 | runtime 미구현 |
+
+USER가 제안한 inline Dimension 생성은 MasterCode 변경 요청의 관리자 승인 트랜잭션에서 승인한
+HUMAN 관리자의 작업으로 실행하고 감사한다. SYSTEM 승인 우회나 자동 실행으로 바꾸지 않는다.
 
 ## 13. 애플리케이션과 DB 책임
 
@@ -514,6 +540,9 @@ DELETE 트리거는 물리 삭제를 거부한다. AFTER INSERT/UPDATE 트리거
 | 삭제 성공 | version +1, DELETED false→true 로그 1개 |
 | tombstone 조회 | 현재 삭제 version과 같은 ETag 반환, 상태 변화 없음 |
 | 복원 성공 | version +1, DELETED true→false 로그 1개 |
+| body·query·header로 actor 또는 SYSTEM 위조 | 신뢰된 HUMAN Principal과 권한이 유지되고 SYSTEM actor가 생성되지 않음 |
+| production composition의 SYSTEM 실행 경로 검사 | identity·credential·Principal·factory·authorization 분기와 승인 우회가 없음 |
+| 미래 호환 SYSTEM actor 형식 | actor_kind는 SYSTEM, actor_role은 SQL NULL, 안정적인 actor_id 필수이며 모든 무결성·감사 규칙 적용 |
 
 ## 16. 인덱스 기준
 
@@ -539,28 +568,36 @@ actor, operation, 기간 단독 인덱스는 관리자 로그 조회 티켓에�
 
 ## 17. 후속 구현 경계
 
-현재 GitHub 티켓과 이 정본의 구현 책임은 다음과 같다. 직접 선행 티켓이 모두 완료된 뒤 해당
-티켓을 시작한다.
+현재 GitHub 티켓과 이 정본의 구현 책임은 다음과 같다. `직접 선행 티켓`은 다른 선행 티켓을
+통해 이미 완료가 보장되는 간선을 제거한 scheduling DAG이다. 단순히 소비하는 정본이나 이미
+전이적으로 보장된 기반은 `비차단 계약 참조`로 분리한다.
 
-| 티켓 | 구현 책임 | 직접 선행 티켓 |
-| --- | --- | --- |
-| #4 | 고정 Dimension 참조, MasterCode 합성 순서와 공유 잠금 계약 | #2 |
-| #22 | 인증, 3단계 HUMAN 역할과 내부 SYSTEM super-user 계약 | #2, #4 |
-| #28 | 이 정본의 구현 책임표와 현재 보안 단계 갱신 | #2 |
-| #16 | actor_kind·actor_role과 transaction-local 감사 컨텍스트 구현 | #2, #22 |
-| #27 | 역할 기반 권한 검사 구현 | #22, #16 |
-| #5 | 관리자·SYSTEM의 Company 생성, 전체 역할 조회와 생성 로그의 첫 수직 슬라이스 | #16, #27, #28 |
-| #24 | Model, Brand, Country, Category 생성·조회 확장 | #5 |
-| #25 | Year, Network 생성·조회 확장 | #5 |
-| #26 | Memory 생성·조회 확장 | #5 |
-| #6 | 관리자·SYSTEM의 MasterCode 생성, 전체 역할 조회와 CREATE 로그 | #4, #16, #24, #25, #26, #27 |
-| #7 | 관리자·SYSTEM의 If-Match 조건부 value 변경과 수정 로그 | #24, #25, #26, #27 |
-| #8 | code 변경, 활성·삭제 MasterCode 재합성과 DimensionLog·MasterCodeLog | #6, #7, #27 |
-| #30 | MasterCode 참조 수정과 aggregate ETag | #6, #7, #27 |
-| #17 | Dimension tombstone 조회, 논리 삭제·복원과 로그 | #8, #27 |
-| #31 | MasterCode tombstone 조회, 논리 삭제·복원과 로그 | #17, #27, #30 |
-| #32 | USER의 MasterCode 요청, inline Dimension 생성과 관리자 승인 | #22, #27, #6, #30, #31 |
-| #18 | 관리자용 DimensionLog 조회 API | #17, #27 |
+| 티켓 | 구현 책임 | 직접 선행 티켓 | 비차단 계약 참조 |
+| --- | --- | --- | --- |
+| #4 | 고정 Dimension 참조, MasterCode 합성 순서와 공유 잠금 계약 | #2 | Dimension 정본 |
+| #22 | HUMAN JWT 인증·계정 수명주기·권한 계약 정본 | #4 | Dimension·MasterCode 정본 |
+| #35 | user·role·JWT signer·opaque token·PasswordHasher 기반 | #22 | 없음 |
+| #36 | Bearer JWT verifier, HUMAN Principal과 운영 이벤트 기반 | #35 | #22 |
+| #47 | 두 정본의 HUMAN-only 실행 경계와 책임표 동기화 | #22 | #21, 완료 기록 #28 |
+| #16 | HUMAN actor와 transaction-local 감사 컨텍스트 구현 | #36 | #22, 두 도메인 정본 |
+| #27 | HUMAN 역할 기반 권한 검사 구현 | #16 | #22 |
+| #5 | ADMIN·SUPER_ADMIN의 Company 생성, 모든 HUMAN 조회와 생성 로그의 첫 수직 슬라이스 | #27, #47 | #16 |
+| #24 | Model, Brand, Country, Category 생성·조회 확장 | #5 | Dimension 정본 |
+| #25 | Year, Network 생성·조회 확장 | #5 | Dimension 정본 |
+| #26 | Memory 생성·조회 확장 | #5 | Dimension 정본 |
+| #6 | ADMIN·SUPER_ADMIN의 MasterCode 생성, 모든 HUMAN 조회와 CREATE 로그 | #24, #25, #26 | #16, #27, MasterCode 정본 |
+| #7 | ADMIN·SUPER_ADMIN의 If-Match 조건부 value 변경과 수정 로그 | #24, #25, #26 | #16, #27 |
+| #8 | ADMIN·SUPER_ADMIN의 code 변경, 활성·삭제 MasterCode 재합성과 두 감사 로그 | #6, #7 | #16, #27 |
+| #30 | ADMIN·SUPER_ADMIN의 MasterCode 참조 수정과 aggregate ETag | #6, #7 | #16, #27 |
+| #17 | ADMIN·SUPER_ADMIN의 Dimension tombstone 조회, 논리 삭제·복원과 로그 | #8 | #27 |
+| #31 | ADMIN·SUPER_ADMIN의 MasterCode tombstone 조회, 논리 삭제·복원과 로그 | #17, #30 | #27 |
+| #32 | USER의 MasterCode 요청, inline Dimension 생성과 HUMAN 관리자 승인 | #31 | #22, #27 |
+| #18 | HUMAN 관리자용 DimensionLog·MasterCodeLog 조회 API | #32 | #27 |
+
+M2~M5는 #35 signer와 #36 verifier로 HUMAN Principal을 만들어 로컬·CI에서 검증하는 acceptance
+increment다. #37 login 완료 전에는 실제 사용자가 credential을 얻는 production 경로가 없으므로
+이 구간만 단독 배포하거나 운영 사용 가능하다고 선언하지 않는다. 임시 무인증 경로,
+production test-token endpoint와 가짜 SYSTEM 경로를 만들지 않는다.
 
 #23의 PostgreSQL 역할 분리와 #19의 감사 로그 변조 방지 강화는 현재 위협 모델에서
 `status: deferred` 및 Not planned로 종료되었으며 구현 선행조건이 아니다. 12.4절의 신뢰 경계를
