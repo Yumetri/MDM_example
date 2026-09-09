@@ -9,12 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mdm.api.documentation import build_documentation_router
 from mdm.api.errors import (
+    invalid_access_token_handler,
     readiness_unavailable_handler,
     unexpected_error_handler,
     validation_error_handler,
 )
 from mdm.api.health import build_health_router
 from mdm.api.openapi import configure_openapi
+from mdm.application.auth import InvalidAccessToken
 from mdm.application.health import CheckReadiness, ReadinessCheck, ReadinessUnavailable
 from mdm.infrastructure.database import SqlAlchemyDatabaseProbe, create_engine
 from mdm.infrastructure.settings import Settings
@@ -50,6 +52,10 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         docs_url=None,
         lifespan=lifespan,
         redoc_url=None,
+    )
+    application.add_exception_handler(
+        InvalidAccessToken,
+        invalid_access_token_handler,
     )
     application.add_exception_handler(
         ReadinessUnavailable,

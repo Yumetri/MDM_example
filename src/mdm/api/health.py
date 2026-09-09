@@ -31,7 +31,7 @@ def build_health_router(readiness_check: ReadinessCheck) -> APIRouter:
         status_code=status.HTTP_200_OK,
         summary="서비스 프로세스 실행 여부 확인",
         description=(
-            "서비스 프로세스가 요청을 처리할 수 있으면 성공 응답을 반환합니다. "
+            "서비스 프로세스가 실행 중이며 생존 확인 요청에 응답하면 성공을 반환합니다. "
             "이 확인은 데이터베이스 상태와 무관합니다."
         ),
         responses={
