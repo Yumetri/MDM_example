@@ -65,10 +65,16 @@ Finish code changes with `make ci-check`. Fix failures or report the blocker and
 ## Commit and Pull Request Workflow
 
 Before every agent-authored commit, stage all intended changes and require the working tree to have
-no unstaged tracked files or non-ignored untracked files. Review the complete staged diff with the
-`$review-agent` skill in read-only mode. If the skill is unavailable, report a blocker instead of
-skipping review. Do not commit while the review has actionable findings: fix them, restage, and
-repeat the review until it reports `No findings.` Commit only after that result and a successful
+no unstaged tracked files or non-ignored untracked files. The authoring agent must then delegate the
+complete staged diff to a fresh reviewer subagent. That subagent must explicitly invoke the
+repository's `$review-agent` skill and review `git diff --cached` in read-only mode. The authoring
+agent must not invoke `$review-agent` in its own task context; the skill's read-only restrictions
+apply only to the reviewer subagent. The authoring agent remains responsible for fixing findings,
+restaging changes, running checks, committing, pushing, and opening the pull request.
+
+If the reviewer subagent cannot access `$review-agent`, report a blocker instead of skipping review.
+Do not commit while the review has actionable findings: fix them, restage, and delegate a fresh
+review again until it reports `No findings.` Commit only after that result and a successful
 pre-commit `make ci-check` run.
 
 After pushing a commit that addresses review feedback on an existing pull request, use
