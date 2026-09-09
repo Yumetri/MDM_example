@@ -398,6 +398,10 @@ change set ID, MasterCode operation과 mutation timestamp를 transaction-local �
 timestamp만 그대로 재사용하고 MasterCode operation은 `RECOMPOSE`로 별도 설정한다. 요청 본문이나
 쿼리 파라미터로 이 값을 받지 않는다.
 
+#16은 실제 MasterCode 테이블이나 업무 트리거를 만들지 않고 이 컨텍스트의 공통 설정·검증 기반을
+제공한다. 최초 실제 MasterCode 테이블과 감사 트리거, 컨텍스트 없는 업무 write 거부는 #6이
+통합해 검증한다.
+
 MasterCode BEFORE INSERT/UPDATE 트리거는 신뢰 컨텍스트의 존재와 다음 상태 전이를 검증한다.
 
 - INSERT는 `CREATE`이고 version은 1이며 deleted_at은 `NULL`이다.
@@ -734,7 +738,7 @@ MasterCodeLog 테이블의 초기 인덱스는 다음과 같다.
 
 | 티켓 | 구현할 주요 벡터 | 직접 선행 티켓 | 비차단 계약 참조 |
 | --- | --- | --- | --- |
-| #16 | 검증된 HUMAN Principal의 actor·transaction-local 감사 컨텍스트 | #36 | #22, 두 도메인 정본 |
+| #16 | 검증된 HUMAN Principal의 actor·transaction-local 감사 컨텍스트 설정·검증 기반(실제 업무 테이블·트리거 제외) | #36 | #22, 두 도메인 정본 |
 | #27 | HUMAN 역할별 접근과 401·403 경계, SYSTEM runtime 제외 | #16 | #22 |
 | #6 | 17.1 생성·조회·ETag, 17.2 입력·유일성과 17.4 동시 생성 | #24, #25, #26 | #16, #27 |
 | #7 | Dimension value 변경과 MasterCode code 불변·aggregate ETag 갱신 | #24, #25, #26 | #16, #27 |
