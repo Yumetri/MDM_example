@@ -21,10 +21,10 @@ ADMIN_ID = UUID("01890f7c-8abc-7def-8abc-111111111111")
 USER_ID = UUID("01890f7c-8abc-7def-8abc-222222222222")
 
 CASES = (
-    ("models", "MOD1", " Galaxy__S24 Ultra ", "GALAXY_S24_ULTRA"),
-    ("brands", "BRA1", " Samsung ", "SAMSUNG"),
-    ("countries", "KOR", " South  Korea ", "SOUTH_KOREA"),
-    ("categories", "PHN", " Smart Phone ", "SMART_PHONE"),
+    ("models", "MOD1", " Galaxy__S24 Ultra ", "GALAXY_S24_ULTRA", "Galaxy S25"),
+    ("brands", "BRA1", " Samsung ", "SAMSUNG", "Apple"),
+    ("countries", "KOR", " South  Korea ", "SOUTH_KOREA", "United States"),
+    ("categories", "PHN", " Smart Phone ", "SMART_PHONE", "Tablet"),
 )
 
 
@@ -77,7 +77,7 @@ async def test_all_string_dimension_routes_cross_real_auth_repository_and_audit(
     async with application.router.lifespan_context(application):
         transport = ASGITransport(app=application, raise_app_exceptions=False)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            for collection, code, raw_value, normalized_value in CASES:
+            for collection, code, raw_value, normalized_value, new_value in CASES:
                 denied = await client.post(
                     f"/dimensions/{collection}",
                     headers={"Authorization": f"Bearer {user_token}"},
@@ -115,6 +115,14 @@ async def test_all_string_dimension_routes_cross_real_auth_repository_and_audit(
                     f"/dimensions/{collection}/01890f7c-8abc-7def-8abc-000000000000",
                     headers={"Authorization": f"Bearer {user_token}"},
                 )
+                updated = await client.patch(
+                    f"/dimensions/{collection}/{created.json()['id']}",
+                    headers={
+                        "Authorization": f"Bearer {admin_token}",
+                        "If-Match": created.headers["etag"],
+                    },
+                    json={"value": new_value, "reason": "수정"},
+                )
 
                 assert denied.status_code == 403
                 assert denied.json()["code"] == "AUTHORIZATION_DENIED"
@@ -133,6 +141,10 @@ async def test_all_string_dimension_routes_cross_real_auth_repository_and_audit(
                 assert spoofed.json()["code"] == "VALIDATION_ERROR"
                 assert missing.status_code == 404
                 assert missing.json()["code"] == "DIMENSION_NOT_FOUND"
+                assert updated.status_code == 200
+                assert updated.headers["etag"] == '"2"'
+                assert updated.json()["value"] != normalized_value
+                assert updated.json()["code"] == code
 
 
 @pytest.mark.api
@@ -150,6 +162,7 @@ def test_string_dimension_openapi_has_stable_operations_and_type_specific_schema
         assert collection_path["post"]["operationId"] == f"create_{singular}_dimension"
         assert collection_path["get"]["operationId"] == f"list_{singular}_dimensions"
         assert detail_path["get"]["operationId"] == f"get_{singular}_dimension"
+        assert detail_path["patch"]["operationId"] == f"update_{singular}_dimension_value"
         assert f"활성 {object_phrase}" in collection_path["get"]["description"]
         assert "cursor는 만료되지 않습니다" in collection_path["get"]["description"]
         assert "이미 삭제된 항목은 결과에서 제외됩니다" in collection_path["get"]["description"]
@@ -174,6 +187,7 @@ def test_string_dimension_openapi_has_stable_operations_and_type_specific_schema
             (collection_path["post"], ("409", "422", "503")),
             (collection_path["get"], ("422", "503")),
             (detail_path["get"], ("404", "422", "503")),
+            (detail_path["patch"], ("400", "404", "409", "412", "422", "428", "503")),
         ):
             for status_code in statuses:
                 problem = operation["responses"][status_code]
@@ -191,15 +205,19 @@ def test_string_dimension_openapi_has_stable_operations_and_type_specific_schema
     assert {
         "ModelCreateRequest",
         "ModelResponse",
+        "ModelValueUpdateRequest",
         "ModelListResponse",
         "BrandCreateRequest",
         "BrandResponse",
+        "BrandValueUpdateRequest",
         "BrandListResponse",
         "CountryCreateRequest",
         "CountryResponse",
+        "CountryValueUpdateRequest",
         "CountryListResponse",
         "CategoryCreateRequest",
         "CategoryResponse",
+        "CategoryValueUpdateRequest",
         "CategoryListResponse",
     } <= component_names
 

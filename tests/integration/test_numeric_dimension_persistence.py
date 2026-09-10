@@ -14,6 +14,7 @@ from mdm.application.numeric_dimensions import (
     NumericDimensionMultipleConflicts,
     NumericDimensionValueConflict,
 )
+from mdm.application.preconditions import PreconditionFailed
 from mdm.domain.audit import DimensionOperation
 from mdm.domain.auth import UserRole
 from mdm.domain.dimensions import DimensionCode, NetworkGeneration, YearValue
@@ -62,11 +63,11 @@ async def numeric_dimension_engine() -> AsyncGenerator[AsyncEngine]:
     await engine.dispose()
 
 
-def _audit():
+def _audit(operation: DimensionOperation = DimensionOperation.CREATE):
     return HumanMutationAuditFactory(change_set_ids=Uuid7Generator().new).create(
         HumanPrincipal(user_id=ACTOR_ID, role=UserRole.ADMIN),
-        dimension_operation=DimensionOperation.CREATE,
-        reason="등록",
+        dimension_operation=operation,
+        reason="등록" if operation is DimensionOperation.CREATE else "수정",
     )
 
 
@@ -205,6 +206,92 @@ async def test_concurrent_numeric_dimension_create_uses_database_unique_constrai
 
     assert sum(not isinstance(result, Exception) for result in results) == 1
     assert sum(isinstance(result, NumericDimensionCodeConflict) for result in results) == 1
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("repository_type", "value_type", "raw", "other", "_table", "log_table"), CASES
+)
+async def test_each_numeric_dimension_updates_value_and_honors_precondition(
+    numeric_dimension_engine: AsyncEngine,
+    repository_type: type,
+    value_type: type,
+    raw: int,
+    other: int,
+    _table: str,
+    log_table: str,
+) -> None:
+    repository = repository_type(create_session_factory(numeric_dimension_engine))
+    created = await repository.create(DimensionCode("VALUE1"), value_type(raw), _audit())
+
+    updated = await repository.update_value(
+        created.id,
+        1,
+        value_type(other),
+        _audit(DimensionOperation.UPDATE),
+    )
+    noop = await repository.update_value(
+        created.id,
+        2,
+        value_type(other),
+        _audit(DimensionOperation.UPDATE),
+    )
+    with pytest.raises(PreconditionFailed):
+        await repository.update_value(
+            created.id,
+            1,
+            value_type(raw),
+            _audit(DimensionOperation.UPDATE),
+        )
+
+    async with numeric_dimension_engine.connect() as connection:
+        update_log = (
+            (
+                await connection.execute(
+                    text(
+                        f"SELECT old_value, new_value, dimension_version FROM {log_table} "
+                        "WHERE dimension_id = :id AND operation = 'UPDATE'"
+                    ),
+                    {"id": created.id},
+                )
+            )
+            .mappings()
+            .one()
+        )
+
+    assert updated.code == created.code
+    assert updated.value == value_type(other)
+    assert updated.version == 2
+    assert noop == updated
+    assert update_log["old_value"] == raw
+    assert update_log["new_value"] == other
+    assert update_log["dimension_version"] == 2
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("repository_type", "value_type", "raw", "other", "_table", "_log_table"), CASES
+)
+async def test_each_numeric_dimension_update_reports_value_conflict(
+    numeric_dimension_engine: AsyncEngine,
+    repository_type: type,
+    value_type: type,
+    raw: int,
+    other: int,
+    _table: str,
+    _log_table: str,
+) -> None:
+    repository = repository_type(create_session_factory(numeric_dimension_engine))
+    first = await repository.create(DimensionCode("VALUE1"), value_type(raw), _audit())
+    await repository.create(DimensionCode("VALUE2"), value_type(other), _audit())
+
+    with pytest.raises(NumericDimensionValueConflict):
+        await repository.update_value(
+            first.id,
+            1,
+            value_type(other),
+            _audit(DimensionOperation.UPDATE),
+        )
 
 
 @pytest.mark.integration

@@ -17,6 +17,7 @@ from mdm.application.dimensions import (
     CompanyRepositoryUnavailable,
     CompanyValueConflict,
 )
+from mdm.application.preconditions import PreconditionFailed
 from mdm.domain.audit import DimensionOperation, MasterCodeOperation, MutationOperations
 from mdm.domain.auth import UserRole
 from mdm.domain.dimensions import CompanyValue, DimensionCode
@@ -38,11 +39,11 @@ async def company_engine() -> AsyncGenerator[AsyncEngine]:
     await engine.dispose()
 
 
-def _audit():
+def _audit(operation: DimensionOperation = DimensionOperation.CREATE):
     return HumanMutationAuditFactory(change_set_ids=Uuid7Generator().new).create(
         HumanPrincipal(user_id=ACTOR_ID, role=UserRole.ADMIN),
-        dimension_operation=DimensionOperation.CREATE,
-        reason="최초 등록",
+        dimension_operation=operation,
+        reason="최초 등록" if operation is DimensionOperation.CREATE else "값 수정",
     )
 
 
@@ -268,3 +269,149 @@ async def test_concurrent_create_relies_on_unique_constraint_for_final_integrity
             text("SELECT count(*) FROM dimension_companies WHERE code = 'SAM'")
         )
     assert count == 1
+
+
+@pytest.mark.integration
+async def test_company_value_update_locks_increments_once_and_writes_one_value_log(
+    company_engine: AsyncEngine,
+) -> None:
+    repository = SqlAlchemyCompanyRepository(create_session_factory(company_engine))
+    created = await repository.create(DimensionCode("SAM"), CompanyValue("Samsung"), _audit())
+
+    updated = await repository.update_value(
+        created.id,
+        1,
+        CompanyValue("Apple Korea"),
+        _audit(DimensionOperation.UPDATE),
+    )
+
+    async with company_engine.connect() as connection:
+        logs = (
+            (
+                await connection.execute(
+                    text(
+                        "SELECT operation, field_name, old_value, new_value, reason, "
+                        "dimension_version, changed_at FROM dimension_company_logs "
+                        "WHERE dimension_id = :id ORDER BY dimension_version, field_name"
+                    ),
+                    {"id": created.id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    assert updated.code == created.code
+    assert updated.value == CompanyValue("APPLE_KOREA")
+    assert updated.version == 2
+    assert updated.updated_at >= created.updated_at
+    assert [(row["operation"], row["field_name"]) for row in logs] == [
+        ("CREATE", "CODE"),
+        ("CREATE", "VALUE"),
+        ("UPDATE", "VALUE"),
+    ]
+    assert logs[-1]["old_value"] == "SAMSUNG"
+    assert logs[-1]["new_value"] == "APPLE_KOREA"
+    assert logs[-1]["reason"] == "값 수정"
+    assert logs[-1]["dimension_version"] == 2
+    assert logs[-1]["changed_at"] == updated.updated_at
+
+
+@pytest.mark.integration
+async def test_company_value_noop_and_stale_precondition_do_not_change_state_or_logs(
+    company_engine: AsyncEngine,
+) -> None:
+    repository = SqlAlchemyCompanyRepository(create_session_factory(company_engine))
+    created = await repository.create(DimensionCode("SAM"), CompanyValue("Samsung"), _audit())
+
+    noop = await repository.update_value(
+        created.id,
+        1,
+        CompanyValue(" samsung "),
+        _audit(DimensionOperation.UPDATE),
+    )
+    with pytest.raises(PreconditionFailed):
+        await repository.update_value(
+            created.id,
+            9,
+            CompanyValue("Apple"),
+            _audit(DimensionOperation.UPDATE),
+        )
+
+    async with company_engine.connect() as connection:
+        log_count = await connection.scalar(
+            text("SELECT count(*) FROM dimension_company_logs WHERE dimension_id = :id"),
+            {"id": created.id},
+        )
+    assert noop == created
+    assert log_count == 2
+
+
+@pytest.mark.integration
+async def test_company_update_reports_value_conflict_and_database_guards_transition_shape(
+    company_engine: AsyncEngine,
+) -> None:
+    sessions = create_session_factory(company_engine)
+    repository = SqlAlchemyCompanyRepository(sessions)
+    first = await repository.create(DimensionCode("SAM"), CompanyValue("Samsung"), _audit())
+    await repository.create(DimensionCode("APP"), CompanyValue("Apple"), _audit())
+
+    with pytest.raises(CompanyValueConflict):
+        await repository.update_value(
+            first.id,
+            1,
+            CompanyValue("Apple"),
+            _audit(DimensionOperation.UPDATE),
+        )
+
+    with pytest.raises(DBAPIError):
+        async with sessions.begin() as session:
+            changed_at = await SqlAlchemyMutationAuditContextWriter(session).set_context(
+                _audit(DimensionOperation.UPDATE), minimum_timestamp=first.updated_at
+            )
+            await session.execute(
+                text(
+                    "UPDATE dimension_companies SET code = 'GOO', version = version + 1, "
+                    "updated_at = :changed_at WHERE id = :id"
+                ),
+                {"changed_at": changed_at, "id": first.id},
+            )
+
+    with pytest.raises(DBAPIError):
+        async with sessions.begin() as session:
+            await SqlAlchemyMutationAuditContextWriter(session).set_context(
+                _audit(DimensionOperation.UPDATE), minimum_timestamp=first.updated_at
+            )
+            await session.execute(
+                text("UPDATE dimension_companies SET value = 'GOOGLE' WHERE id = :id"),
+                {"id": first.id},
+            )
+
+
+@pytest.mark.integration
+async def test_concurrent_company_updates_with_one_etag_commit_only_once(
+    company_engine: AsyncEngine,
+) -> None:
+    sessions = create_session_factory(company_engine)
+    created = await SqlAlchemyCompanyRepository(sessions).create(
+        DimensionCode("SAM"), CompanyValue("Samsung"), _audit()
+    )
+
+    results = await asyncio.gather(
+        SqlAlchemyCompanyRepository(sessions).update_value(
+            created.id,
+            1,
+            CompanyValue("Apple"),
+            _audit(DimensionOperation.UPDATE),
+        ),
+        SqlAlchemyCompanyRepository(sessions).update_value(
+            created.id,
+            1,
+            CompanyValue("Google"),
+            _audit(DimensionOperation.UPDATE),
+        ),
+        return_exceptions=True,
+    )
+
+    assert sum(not isinstance(result, Exception) for result in results) == 1
+    assert sum(isinstance(result, PreconditionFailed) for result in results) == 1

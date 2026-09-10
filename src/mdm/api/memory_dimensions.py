@@ -7,11 +7,16 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Path, Query, Response, status
+from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from mdm.api.auth import INVALID_ACCESS_TOKEN_RESPONSE
 from mdm.api.authorization import AUTHORIZATION_DENIED_RESPONSE, build_authorization_guard
+from mdm.api.preconditions import (
+    DimensionIfMatchHeader,
+    dimension_precondition_responses,
+    parse_dimension_if_match_values,
+)
 from mdm.api.schemas import ProblemDetails
 from mdm.application.auth import HumanPrincipal
 from mdm.application.authorization import AuthorizationAction, AuthorizationPolicy
@@ -21,6 +26,7 @@ from mdm.application.memory_dimensions import (
     ListMemories,
     MemoryDimensionCursor,
     MemoryDimensionPage,
+    UpdateMemoryValue,
 )
 from mdm.domain.dimensions import Dimension, DimensionValidationError, MemoryValue
 
@@ -65,7 +71,7 @@ def _reason_field() -> Any:
 
 
 class MemoryValueInput(BaseModel):
-    """Memory Dimension의 생성 입력 값입니다."""
+    """Memory Dimension의 생성·수정 입력 값입니다."""
 
     model_config = ConfigDict(extra="forbid")
     amount: Annotated[
@@ -109,15 +115,41 @@ class MemoryCreateRequest(BaseModel):
     reason: Annotated[StrictStr | None, _reason_field()] = None
 
 
+class MemoryValueUpdateRequest(BaseModel):
+    """Memory Dimension value 수정 입력입니다."""
+
+    model_config = ConfigDict(extra="forbid")
+    value: Annotated[
+        MemoryValueInput,
+        Field(
+            description=(
+                "새 amount·unit을 묶은 논리 값입니다. 현재 값과 동등한 capacity_mb이면 현재 "
+                "저장된 amount·unit 표현을 유지하고 상태를 변경하지 않습니다."
+            )
+        ),
+    ]
+    reason: Annotated[
+        StrictStr | None,
+        Field(
+            description=(
+                "수정 이유입니다. 앞뒤 일반 공백을 제거한 결과가 500자 이하여야 하며, "
+                "빈 값은 저장하지 않습니다."
+            ),
+            examples=["용량 표기 정정"],
+            json_schema_extra={"x-normalized-maxLength": 500},
+        ),
+    ] = None
+
+
 class MemoryValueResponse(BaseModel):
-    """원래 단위 표현과 서버가 계산한 동등 용량입니다."""
+    """현재 단위 표현과 서버가 계산한 동등 용량입니다."""
 
     amount: Annotated[
         int,
         Field(
             ge=1,
             le=2_147_483_647,
-            description="생성할 때 보존한 1~2147483647의 정수입니다.",
+            description="현재 저장된 1~2147483647의 정수입니다.",
         ),
     ]
     unit: Annotated[
@@ -179,6 +211,7 @@ def build_memory_router(
     create_memory: CreateMemory,
     get_memory: GetMemory,
     list_memories: ListMemories,
+    update_memory: UpdateMemoryValue,
     principal_dependency: Callable[..., HumanPrincipal],
     authorization: AuthorizationPolicy,
 ) -> APIRouter:
@@ -273,6 +306,44 @@ def build_memory_router(
         principal: Annotated[HumanPrincipal, Depends(read_guard)],
     ) -> MemoryResponse:
         dimension = await get_memory.execute(principal, dimension_id)
+        response.headers["ETag"] = _etag(dimension.version)
+        return _response(dimension)
+
+    @router.patch(
+        "/{dimension_id}",
+        operation_id="update_memory_dimension_value",
+        response_model=MemoryResponse,
+        status_code=status.HTTP_200_OK,
+        summary="Memory Dimension 값 수정",
+        description=(
+            "ADMIN 또는 SUPER_ADMIN이 강한 If-Match로 Memory amount·unit을 하나의 value로 "
+            "조건부 수정합니다. code와 capacity_mb 입력은 허용하지 않으며, 동등한 capacity_mb이면 "
+            "현재 저장된 표현과 version·시각·감사 로그를 유지합니다."
+        ),
+        responses=_update_responses(),
+    )
+    async def update_memory_route(
+        dimension_id: Annotated[
+            UUID, Path(description="수정할 Memory Dimension의 UUID 식별자입니다.")
+        ],
+        payload: MemoryValueUpdateRequest,
+        request: Request,
+        response: Response,
+        principal: Annotated[HumanPrincipal, Depends(mutation_guard)],
+        if_match: DimensionIfMatchHeader,
+    ) -> MemoryResponse:
+        expected_version = parse_dimension_if_match_values(request.headers.getlist("if-match"))
+        try:
+            dimension = await update_memory.execute(
+                principal,
+                dimension_id,
+                expected_version=expected_version,
+                amount=payload.value.amount,
+                unit=payload.value.unit,
+                reason=payload.reason,
+            )
+        except DimensionValidationError as error:
+            raise DimensionValidationError(f"body.{error.field}", error.message) from error
         response.headers["ETag"] = _etag(dimension.version)
         return _response(dimension)
 
@@ -472,6 +543,39 @@ def _get_responses() -> dict[int | str, dict[str, Any]]:
             description="Memory 식별자 형식이 유효하지 않습니다.", field="path.dimension_id"
         ),
         503: _service_unavailable_response(),
+    }
+
+
+def _update_responses() -> dict[int | str, dict[str, Any]]:
+    return {
+        200: {
+            "description": "현재 Memory Dimension 상태를 반환합니다.",
+            "headers": {
+                "ETag": {
+                    "description": "응답 본문 version과 같은 현재 강한 ETag입니다.",
+                    "schema": {"type": "string", "example": '"1"'},
+                }
+            },
+        },
+        401: INVALID_ACCESS_TOKEN_RESPONSE,
+        403: AUTHORIZATION_DENIED_RESPONSE,
+        404: _get_responses()[404],
+        409: _problem_response(
+            description="동등한 Memory capacity_mb가 이미 사용 중입니다.",
+            example={
+                "type": "/problems/dimension-value-conflict",
+                "title": "Dimension 값 충돌",
+                "status": 409,
+                "detail": "동등한 Memory 용량이 이미 사용 중입니다.",
+                "code": "DIMENSION_VALUE_CONFLICT",
+                "violations": [{"field": "body.value", "message": "이미 사용 중인 값입니다."}],
+            },
+        ),
+        422: _validation_response(
+            description="Memory 수정 입력값이 유효하지 않습니다.", field="body.value"
+        ),
+        503: _service_unavailable_response(),
+        **dimension_precondition_responses(),
     }
 
 

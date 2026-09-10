@@ -21,8 +21,8 @@ ADMIN_ID = UUID("01890f7c-8abc-7def-8abc-111111111111")
 USER_ID = UUID("01890f7c-8abc-7def-8abc-222222222222")
 
 CASES = (
-    ("years", "YR2026", 2026),
-    ("networks", "NET5", 5),
+    ("years", "YR2026", 2026, 2027),
+    ("networks", "NET5", 5, 4),
 )
 
 
@@ -73,7 +73,7 @@ async def test_numeric_dimension_routes_cross_real_auth_repository_and_audit(
     async with application.router.lifespan_context(application):
         transport = ASGITransport(app=application, raise_app_exceptions=False)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            for collection, code, value in CASES:
+            for collection, code, value, new_value in CASES:
                 denied = await client.post(
                     f"/dimensions/{collection}",
                     headers={"Authorization": f"Bearer {user_token}"},
@@ -111,6 +111,14 @@ async def test_numeric_dimension_routes_cross_real_auth_repository_and_audit(
                     f"/dimensions/{collection}/01890f7c-8abc-7def-8abc-000000000000",
                     headers={"Authorization": f"Bearer {user_token}"},
                 )
+                updated = await client.patch(
+                    f"/dimensions/{collection}/{created.json()['id']}",
+                    headers={
+                        "Authorization": f"Bearer {admin_token}",
+                        "If-Match": created.headers["etag"],
+                    },
+                    json={"value": new_value, "reason": "수정"},
+                )
 
                 assert denied.status_code == 403
                 assert denied.json()["code"] == "AUTHORIZATION_DENIED"
@@ -129,6 +137,10 @@ async def test_numeric_dimension_routes_cross_real_auth_repository_and_audit(
                 assert spoofed.json()["code"] == "VALIDATION_ERROR"
                 assert missing.status_code == 404
                 assert missing.json()["code"] == "DIMENSION_NOT_FOUND"
+                assert updated.status_code == 200
+                assert updated.headers["etag"] == '"2"'
+                assert updated.json()["value"] == new_value
+                assert updated.json()["code"] == code
 
             for collection, invalid_values in (
                 ("years", ("2026", 2026.0, True, 1999, 3000)),
@@ -158,6 +170,7 @@ def test_numeric_dimension_openapi_has_stable_operations_and_strict_integer_sche
         assert collection_path["post"]["operationId"] == f"create_{singular}_dimension"
         assert collection_path["get"]["operationId"] == f"list_{singular}_dimensions"
         assert detail_path["get"]["operationId"] == f"get_{singular}_dimension"
+        assert detail_path["patch"]["operationId"] == f"update_{singular}_dimension_value"
         request_schema = schema["components"]["schemas"][f"{display_name}CreateRequest"]
         value_schema = request_schema["properties"]["value"]
         assert value_schema["type"] == "integer"
@@ -179,6 +192,7 @@ def test_numeric_dimension_openapi_has_stable_operations_and_strict_integer_sche
             (collection_path["post"], ("409", "422", "503")),
             (collection_path["get"], ("422", "503")),
             (detail_path["get"], ("404", "422", "503")),
+            (detail_path["patch"], ("400", "404", "409", "412", "422", "428", "503")),
         ):
             for status_code in statuses:
                 assert operation["responses"][status_code]["content"]["application/problem+json"][

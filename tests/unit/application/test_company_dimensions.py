@@ -13,6 +13,7 @@ from mdm.application.dimensions import (
     CreateCompany,
     GetCompany,
     ListCompanies,
+    UpdateCompanyValue,
 )
 from mdm.domain.audit import DimensionOperation, MutationAuditMetadata
 from mdm.domain.auth import UserRole
@@ -30,6 +31,7 @@ class RecordingCompanyRepository(CompanyRepository):
         self.create_call: tuple[DimensionCode, CompanyValue, MutationAuditMetadata] | None = None
         self.get_call: UUID | None = None
         self.list_call: tuple[CompanyCursor | None, int] | None = None
+        self.update_call: tuple[UUID, int, CompanyValue, MutationAuditMetadata] | None = None
         self.company = Dimension(
             id=COMPANY_ID,
             code=DimensionCode("SAM"),
@@ -61,6 +63,10 @@ class RecordingCompanyRepository(CompanyRepository):
     ) -> CompanyPage:
         self.list_call = (after, limit)
         return CompanyPage(items=(self.company,), has_more=False)
+
+    async def update_value(self, company_id, expected_version, value, audit):
+        self.update_call = (company_id, expected_version, value, audit)
+        return self.company
 
 
 def _principal(role: UserRole) -> HumanPrincipal:
@@ -108,6 +114,54 @@ async def test_user_cannot_directly_create_a_company() -> None:
         await use_case.execute(_principal(UserRole.USER), code="SAM", value="SAMSUNG", reason=None)
 
     assert repository.create_call is None
+
+
+@pytest.mark.unit
+async def test_admin_updates_company_value_with_one_human_update_context() -> None:
+    repository = RecordingCompanyRepository()
+    use_case = UpdateCompanyValue(
+        repository,
+        AuthorizationPolicy(),
+        HumanMutationAuditFactory(change_set_ids=lambda: CHANGE_SET_ID),
+    )
+
+    result = await use_case.execute(
+        _principal(UserRole.ADMIN),
+        COMPANY_ID,
+        expected_version=1,
+        value=" Apple  Korea ",
+        reason=" 수정 ",
+    )
+
+    assert result is repository.company
+    assert repository.update_call is not None
+    dimension_id, expected_version, value, audit = repository.update_call
+    assert dimension_id == COMPANY_ID
+    assert expected_version == 1
+    assert value == CompanyValue("APPLE_KOREA")
+    assert audit.operations.dimension is DimensionOperation.UPDATE
+    assert audit.reason == "수정"
+
+
+@pytest.mark.unit
+async def test_user_cannot_directly_update_a_company() -> None:
+    repository = RecordingCompanyRepository()
+    use_case = UpdateCompanyValue(
+        repository,
+        AuthorizationPolicy(),
+        HumanMutationAuditFactory(change_set_ids=lambda: CHANGE_SET_ID),
+    )
+
+    with pytest.raises(AuthorizationDenied):
+        await use_case.execute(
+            _principal(UserRole.USER),
+            COMPANY_ID,
+            expected_version=1,
+            value="Apple",
+            reason=None,
+        )
+
+    assert repository.update_call is None
 
 
 @pytest.mark.unit

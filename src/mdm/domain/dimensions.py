@@ -242,3 +242,27 @@ class Dimension[ValueT]:
     @property
     def is_deleted(self) -> bool:
         return self.deleted_at is not None
+
+    def change_value(self, value: ValueT, *, changed_at: datetime) -> "Dimension[ValueT]":
+        """Return the next immutable state for one logical value change."""
+        if _dimension_values_equal(self.value, value):
+            return self
+        if changed_at.utcoffset() is None:
+            raise DimensionValidationError("updated_at", "시간대가 포함된 시각이어야 합니다.")
+        if changed_at < self.updated_at:
+            raise DimensionValidationError("updated_at", "현재 updated_at보다 빠를 수 없습니다.")
+        return Dimension(
+            id=self.id,
+            code=self.code,
+            value=value,
+            version=self.version + 1,
+            created_at=self.created_at,
+            updated_at=changed_at,
+            deleted_at=self.deleted_at,
+        )
+
+
+def _dimension_values_equal(current: object, proposed: object) -> bool:
+    if isinstance(current, MemoryValue) and isinstance(proposed, MemoryValue):
+        return current.capacity_mb == proposed.capacity_mb
+    return current == proposed

@@ -73,6 +73,14 @@ class MemoryRepository(Protocol):
         limit: int,
     ) -> MemoryDimensionPage: ...
 
+    async def update_value(
+        self,
+        dimension_id: UUID,
+        expected_version: int,
+        value: MemoryValue,
+        audit: MutationAuditMetadata,
+    ) -> Dimension[MemoryValue]: ...
+
 
 class CreateMemory:
     def __init__(
@@ -108,6 +116,46 @@ class CreateMemory:
                 "reason", "유효한 변경 사유를 입력해야 합니다."
             ) from error
         return await self._repository.create(normalized_code, normalized_value, audit)
+
+
+class UpdateMemoryValue:
+    def __init__(
+        self,
+        repository: MemoryRepository,
+        authorization: AuthorizationPolicy,
+        audit_factory: HumanMutationAuditFactory,
+    ) -> None:
+        self._repository = repository
+        self._authorization = authorization
+        self._audit_factory = audit_factory
+
+    async def execute(
+        self,
+        principal: HumanPrincipal,
+        dimension_id: UUID,
+        *,
+        expected_version: int,
+        amount: int,
+        unit: str,
+        reason: str | None,
+    ) -> Dimension[MemoryValue]:
+        self._authorization.authorize(principal, AuthorizationAction.MUTATE_DATA)
+        if type(expected_version) is not int or expected_version < 1:
+            raise ValueError("expected version must be a positive integer")
+        normalized_value = MemoryValue.create(amount=amount, unit=unit)
+        try:
+            audit = self._audit_factory.create(
+                principal,
+                dimension_operation=DimensionOperation.UPDATE,
+                reason=reason,
+            )
+        except AuditInvariantError as error:
+            raise DimensionValidationError(
+                "reason", "유효한 변경 사유를 입력해야 합니다."
+            ) from error
+        return await self._repository.update_value(
+            dimension_id, expected_version, normalized_value, audit
+        )
 
 
 class GetMemory:

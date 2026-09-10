@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mdm.application.audit import HumanMutationAuditFactory
 from mdm.application.auth import HumanPrincipal
+from mdm.application.preconditions import PreconditionFailed
 from mdm.application.string_dimensions import (
     StringDimensionCodeConflict,
     StringDimensionMultipleConflicts,
@@ -64,11 +65,11 @@ async def string_dimension_engine() -> AsyncGenerator[AsyncEngine]:
     await engine.dispose()
 
 
-def _audit():
+def _audit(operation: DimensionOperation = DimensionOperation.CREATE):
     return HumanMutationAuditFactory(change_set_ids=Uuid7Generator().new).create(
         HumanPrincipal(user_id=ACTOR_ID, role=UserRole.ADMIN),
-        dimension_operation=DimensionOperation.CREATE,
-        reason="등록",
+        dimension_operation=operation,
+        reason="등록" if operation is DimensionOperation.CREATE else "수정",
     )
 
 
@@ -185,6 +186,89 @@ async def test_concurrent_string_dimension_create_uses_database_unique_constrain
 
     assert sum(not isinstance(result, Exception) for result in results) == 1
     assert sum(isinstance(result, StringDimensionCodeConflict) for result in results) == 1
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("repository_type", "value_type", "_table", "log_table"), CASES)
+async def test_each_string_dimension_updates_value_and_logs_exactly_once(
+    string_dimension_engine: AsyncEngine,
+    repository_type: type,
+    value_type: type,
+    _table: str,
+    log_table: str,
+) -> None:
+    repository = repository_type(create_session_factory(string_dimension_engine))
+    created = await repository.create(DimensionCode("VALUE1"), value_type("First"), _audit())
+
+    updated = await repository.update_value(
+        created.id,
+        1,
+        value_type(" Second Value "),
+        _audit(DimensionOperation.UPDATE),
+    )
+    noop = await repository.update_value(
+        created.id,
+        2,
+        value_type("second__value"),
+        _audit(DimensionOperation.UPDATE),
+    )
+    with pytest.raises(PreconditionFailed):
+        await repository.update_value(
+            created.id,
+            1,
+            value_type("Third"),
+            _audit(DimensionOperation.UPDATE),
+        )
+
+    async with string_dimension_engine.connect() as connection:
+        logs = (
+            (
+                await connection.execute(
+                    text(
+                        f"SELECT operation, field_name, old_value, new_value "
+                        f"FROM {log_table} WHERE dimension_id = :id "
+                        "ORDER BY dimension_version, field_name"
+                    ),
+                    {"id": created.id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    assert updated.code == created.code
+    assert updated.value == value_type("SECOND_VALUE")
+    assert updated.version == 2
+    assert noop == updated
+    assert [(row["operation"], row["field_name"]) for row in logs] == [
+        ("CREATE", "CODE"),
+        ("CREATE", "VALUE"),
+        ("UPDATE", "VALUE"),
+    ]
+    assert logs[-1]["old_value"] == "FIRST"
+    assert logs[-1]["new_value"] == "SECOND_VALUE"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("repository_type", "value_type", "_table", "_log_table"), CASES)
+async def test_each_string_dimension_update_reports_value_conflict(
+    string_dimension_engine: AsyncEngine,
+    repository_type: type,
+    value_type: type,
+    _table: str,
+    _log_table: str,
+) -> None:
+    repository = repository_type(create_session_factory(string_dimension_engine))
+    first = await repository.create(DimensionCode("VALUE1"), value_type("First"), _audit())
+    await repository.create(DimensionCode("VALUE2"), value_type("Second"), _audit())
+
+    with pytest.raises(StringDimensionValueConflict):
+        await repository.update_value(
+            first.id,
+            1,
+            value_type("Second"),
+            _audit(DimensionOperation.UPDATE),
+        )
 
 
 async def connection_count(engine: AsyncEngine, table: str) -> int:

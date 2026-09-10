@@ -114,7 +114,7 @@ class ProblemDetails(BaseModel):
     violations: Annotated[
         list[FieldViolation] | None,
         Field(
-            description="입력값 검증 실패 시 유효하지 않은 필드 목록입니다.",
+            description="입력값 검증 또는 충돌과 관련된 필드별 문제 목록입니다.",
             examples=[[{"field": "body.code", "message": "필수 필드입니다."}]],
         ),
     ] = None

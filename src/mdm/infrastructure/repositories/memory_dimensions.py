@@ -23,6 +23,7 @@ from mdm.application.memory_dimensions import (
     MemoryDimensionRepositoryUnavailable,
     MemoryDimensionValueConflict,
 )
+from mdm.application.preconditions import PreconditionFailed
 from mdm.domain.audit import MutationAuditMetadata
 from mdm.domain.dimensions import Dimension, DimensionCode, MemoryUnit, MemoryValue
 from mdm.infrastructure.audit_context import SqlAlchemyMutationAuditContextWriter
@@ -96,6 +97,60 @@ class SqlAlchemyMemoryRepository:
         if record is None:
             raise MemoryDimensionNotFound
         return _to_domain(record)
+
+    async def update_value(
+        self,
+        dimension_id: UUID,
+        expected_version: int,
+        value: MemoryValue,
+        audit: MutationAuditMetadata,
+    ) -> Dimension[MemoryValue]:
+        try:
+            async with self._session_factory.begin() as session:
+                record = await session.scalar(
+                    select(MemoryRecord)
+                    .where(
+                        MemoryRecord.id == dimension_id,
+                        MemoryRecord.deleted_at.is_(None),
+                    )
+                    .with_for_update()
+                )
+                if record is None:
+                    raise MemoryDimensionNotFound
+                current = _to_domain(record)
+                if current.version != expected_version:
+                    raise PreconditionFailed
+                if current.value.capacity_mb == value.capacity_mb:
+                    return current
+                conflict = await session.scalar(
+                    select(MemoryRecord.id).where(
+                        MemoryRecord.id != dimension_id,
+                        MemoryRecord.capacity_mb == value.capacity_mb,
+                    )
+                )
+                if conflict is not None:
+                    raise MemoryDimensionValueConflict
+
+                changed_at = await SqlAlchemyMutationAuditContextWriter(session).set_context(
+                    audit, minimum_timestamp=current.updated_at
+                )
+                changed = current.change_value(value, changed_at=changed_at)
+                record.amount = changed.value.amount
+                record.unit = changed.value.unit.value
+                record.version = changed.version
+                record.updated_at = changed.updated_at
+                await session.flush()
+                await session.refresh(record)
+                return _to_domain(record)
+        except IntegrityError as error:
+            if _constraint_name(error) == "uq_dimension_memories_capacity_mb":
+                raise MemoryDimensionValueConflict from None
+            raise
+        except MutationAuditContextUnavailable:
+            raise MemoryDimensionRepositoryUnavailable from None
+        except SQLAlchemyError as error:
+            _raise_if_temporarily_unavailable(error)
+            raise
 
     async def list_active(
         self,

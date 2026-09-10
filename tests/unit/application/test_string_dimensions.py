@@ -21,6 +21,10 @@ from mdm.application.string_dimensions import (
     ListModels,
     StringDimensionCursor,
     StringDimensionPage,
+    UpdateBrandValue,
+    UpdateCategoryValue,
+    UpdateCountryValue,
+    UpdateModelValue,
 )
 from mdm.domain.audit import DimensionOperation, MutationAuditMetadata
 from mdm.domain.auth import UserRole
@@ -53,6 +57,7 @@ class RecordingRepository:
         self.create_call: tuple[DimensionCode, object, MutationAuditMetadata] | None = None
         self.get_call: UUID | None = None
         self.list_call: tuple[StringDimensionCursor | None, int] | None = None
+        self.update_call: tuple[UUID, int, object, MutationAuditMetadata] | None = None
 
     async def create(self, code, value, audit):
         self.create_call = (code, value, audit)
@@ -66,12 +71,16 @@ class RecordingRepository:
         self.list_call = (after, limit)
         return StringDimensionPage(items=(self.dimension,), has_more=False)
 
+    async def update_value(self, dimension_id, expected_version, value, audit):
+        self.update_call = (dimension_id, expected_version, value, audit)
+        return self.dimension
+
 
 CASES = (
-    (CreateModel, GetModel, ListModels, ModelValue),
-    (CreateBrand, GetBrand, ListBrands, BrandValue),
-    (CreateCountry, GetCountry, ListCountries, CountryValue),
-    (CreateCategory, GetCategory, ListCategories, CategoryValue),
+    (CreateModel, GetModel, ListModels, UpdateModelValue, ModelValue),
+    (CreateBrand, GetBrand, ListBrands, UpdateBrandValue, BrandValue),
+    (CreateCountry, GetCountry, ListCountries, UpdateCountryValue, CountryValue),
+    (CreateCategory, GetCategory, ListCategories, UpdateCategoryValue, CategoryValue),
 )
 
 
@@ -80,11 +89,14 @@ def _principal(role: UserRole) -> HumanPrincipal:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(("create_type", "get_type", "list_type", "value_type"), CASES)
+@pytest.mark.parametrize(
+    ("create_type", "get_type", "list_type", "_update_type", "value_type"), CASES
+)
 async def test_string_dimension_use_cases_keep_type_boundaries_and_common_policy(
     create_type: type,
     get_type: type,
     list_type: type,
+    _update_type: type,
     value_type: type,
 ) -> None:
     repository = RecordingRepository(value_type("Galaxy S24"))
@@ -120,11 +132,14 @@ async def test_string_dimension_use_cases_keep_type_boundaries_and_common_policy
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(("create_type", "_get_type", "_list_type", "value_type"), CASES)
+@pytest.mark.parametrize(
+    ("create_type", "_get_type", "_list_type", "_update_type", "value_type"), CASES
+)
 async def test_user_cannot_create_any_string_dimension(
     create_type: type,
     _get_type: type,
     _list_type: type,
+    _update_type: type,
     value_type: type,
 ) -> None:
     repository = RecordingRepository(value_type("Galaxy S24"))
@@ -140,3 +155,38 @@ async def test_user_cannot_create_any_string_dimension(
         )
 
     assert repository.create_call is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("_create_type", "_get_type", "_list_type", "update_type", "value_type"), CASES
+)
+async def test_admin_updates_each_string_dimension_with_normalized_value(
+    _create_type: type,
+    _get_type: type,
+    _list_type: type,
+    update_type: type,
+    value_type: type,
+) -> None:
+    repository = RecordingRepository(value_type("Galaxy S24"))
+    update = update_type(
+        repository,
+        AuthorizationPolicy(),
+        HumanMutationAuditFactory(change_set_ids=lambda: CHANGE_SET_ID),
+    )
+
+    await update.execute(
+        _principal(UserRole.ADMIN),
+        DIMENSION_ID,
+        expected_version=4,
+        value=" Apple  Pro ",
+        reason=" 수정 ",
+    )
+
+    assert repository.update_call is not None
+    dimension_id, version, value, audit = repository.update_call
+    assert dimension_id == DIMENSION_ID
+    assert version == 4
+    assert value == value_type("APPLE_PRO")
+    assert audit.operations.dimension is DimensionOperation.UPDATE
+    assert audit.reason == "수정"

@@ -75,6 +75,30 @@ async def test_real_jwt_api_repository_trigger_and_reads_form_one_vertical_slice
                 f"/dimensions/companies/{created.json()['id']}",
                 headers={"Authorization": f"Bearer {user_token}"},
             )
+            denied_update = await client.patch(
+                f"/dimensions/companies/{created.json()['id']}",
+                headers={
+                    "Authorization": f"Bearer {user_token}",
+                    "If-Match": created.headers["etag"],
+                },
+                json={"value": "Apple"},
+            )
+            updated = await client.patch(
+                f"/dimensions/companies/{created.json()['id']}",
+                headers={
+                    "Authorization": f"Bearer {admin_token}",
+                    "If-Match": created.headers["etag"],
+                },
+                json={"value": " Apple  Korea ", "reason": "회사명 수정"},
+            )
+            stale = await client.patch(
+                f"/dimensions/companies/{created.json()['id']}",
+                headers={
+                    "Authorization": f"Bearer {admin_token}",
+                    "If-Match": created.headers["etag"],
+                },
+                json={"value": "Google"},
+            )
 
     assert created.status_code == 201
     assert created.headers["etag"] == '"1"'
@@ -85,3 +109,10 @@ async def test_real_jwt_api_repository_trigger_and_reads_form_one_vertical_slice
     assert detail.status_code == 200
     assert detail.headers["etag"] == '"1"'
     assert detail.json() == created.json()
+    assert denied_update.status_code == 403
+    assert updated.status_code == 200
+    assert updated.headers["etag"] == '"2"'
+    assert updated.json()["value"] == "APPLE_KOREA"
+    assert updated.json()["code"] == created.json()["code"]
+    assert stale.status_code == 412
+    assert stale.json()["code"] == "PRECONDITION_FAILED"

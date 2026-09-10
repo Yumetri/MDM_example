@@ -14,6 +14,7 @@ from mdm.application.memory_dimensions import (
     MemoryDimensionMultipleConflicts,
     MemoryDimensionValueConflict,
 )
+from mdm.application.preconditions import PreconditionFailed
 from mdm.domain.audit import DimensionOperation
 from mdm.domain.auth import UserRole
 from mdm.domain.dimensions import DimensionCode, MemoryUnit, MemoryValue
@@ -35,11 +36,11 @@ async def memory_engine() -> AsyncGenerator[AsyncEngine]:
     await engine.dispose()
 
 
-def _audit():
+def _audit(operation: DimensionOperation = DimensionOperation.CREATE):
     return HumanMutationAuditFactory(change_set_ids=Uuid7Generator().new).create(
         HumanPrincipal(user_id=ACTOR_ID, role=UserRole.ADMIN),
-        dimension_operation=DimensionOperation.CREATE,
-        reason="등록",
+        dimension_operation=operation,
+        reason="등록" if operation is DimensionOperation.CREATE else "수정",
     )
 
 
@@ -250,4 +251,112 @@ async def test_memory_log_rejects_invalid_value_shape(
                     "new_value": invalid_json,
                     "actor_id": str(ACTOR_ID),
                 },
+            )
+
+
+@pytest.mark.integration
+async def test_memory_update_is_atomic_and_equivalent_capacity_is_noop(
+    memory_engine: AsyncEngine,
+) -> None:
+    repository = SqlAlchemyMemoryRepository(create_session_factory(memory_engine))
+    created = await repository.create(
+        DimensionCode("MEM1TB"), MemoryValue(amount=1, unit=MemoryUnit.TB), _audit()
+    )
+
+    equivalent = await repository.update_value(
+        created.id,
+        1,
+        MemoryValue(amount=1000, unit=MemoryUnit.GB),
+        _audit(DimensionOperation.UPDATE),
+    )
+    updated = await repository.update_value(
+        created.id,
+        1,
+        MemoryValue(amount=2, unit=MemoryUnit.TB),
+        _audit(DimensionOperation.UPDATE),
+    )
+    with pytest.raises(PreconditionFailed):
+        await repository.update_value(
+            created.id,
+            1,
+            MemoryValue(amount=3, unit=MemoryUnit.TB),
+            _audit(DimensionOperation.UPDATE),
+        )
+
+    async with memory_engine.connect() as connection:
+        stored = (
+            (
+                await connection.execute(
+                    text("SELECT amount, unit, capacity_mb FROM dimension_memories WHERE id = :id"),
+                    {"id": created.id},
+                )
+            )
+            .mappings()
+            .one()
+        )
+        update_logs = (
+            (
+                await connection.execute(
+                    text(
+                        "SELECT old_value, new_value, dimension_version "
+                        "FROM dimension_memory_logs "
+                        "WHERE dimension_id = :id AND operation = 'UPDATE'"
+                    ),
+                    {"id": created.id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    assert equivalent == created
+    assert updated.version == 2
+    assert stored == {"amount": 2, "unit": "TB", "capacity_mb": 2_000_000}
+    assert len(update_logs) == 1
+    assert update_logs[0]["old_value"] == {
+        "amount": 1,
+        "unit": "TB",
+        "capacity_mb": 1_000_000,
+    }
+    assert update_logs[0]["new_value"] == {
+        "amount": 2,
+        "unit": "TB",
+        "capacity_mb": 2_000_000,
+    }
+    assert update_logs[0]["dimension_version"] == 2
+
+
+@pytest.mark.integration
+async def test_memory_update_reports_equivalent_capacity_conflict_and_rejects_sql_reexpression(
+    memory_engine: AsyncEngine,
+) -> None:
+    sessions = create_session_factory(memory_engine)
+    repository = SqlAlchemyMemoryRepository(sessions)
+    first = await repository.create(
+        DimensionCode("MEM1TB"), MemoryValue(amount=1, unit=MemoryUnit.TB), _audit()
+    )
+    await repository.create(
+        DimensionCode("MEM2TB"), MemoryValue(amount=2, unit=MemoryUnit.TB), _audit()
+    )
+
+    with pytest.raises(MemoryDimensionValueConflict):
+        await repository.update_value(
+            first.id,
+            1,
+            MemoryValue(amount=2000, unit=MemoryUnit.GB),
+            _audit(DimensionOperation.UPDATE),
+        )
+
+    with pytest.raises(DBAPIError):
+        async with sessions.begin() as session:
+            mutation_timestamp = await SqlAlchemyMutationAuditContextWriter(session).set_context(
+                _audit(DimensionOperation.UPDATE), minimum_timestamp=first.updated_at
+            )
+            await session.execute(
+                text(
+                    "UPDATE dimension_memories "
+                    "SET amount = 1000, unit = 'GB', version = version + 1, "
+                    "updated_at = :updated_at WHERE id = :id"
+                ),
+                {"id": first.id, "updated_at": mutation_timestamp},
             )

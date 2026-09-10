@@ -7,11 +7,16 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Path, Query, Response, status
+from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from mdm.api.auth import INVALID_ACCESS_TOKEN_RESPONSE
 from mdm.api.authorization import AUTHORIZATION_DENIED_RESPONSE, build_authorization_guard
+from mdm.api.preconditions import (
+    DimensionIfMatchHeader,
+    dimension_precondition_responses,
+    parse_dimension_if_match_values,
+)
 from mdm.api.schemas import ProblemDetails
 from mdm.application.auth import HumanPrincipal
 from mdm.application.authorization import AuthorizationAction, AuthorizationPolicy
@@ -21,6 +26,7 @@ from mdm.application.dimensions import (
     CreateCompany,
     GetCompany,
     ListCompanies,
+    UpdateCompanyValue,
 )
 from mdm.domain.dimensions import CompanyValue, Dimension, DimensionValidationError
 
@@ -83,6 +89,39 @@ class CompanyCreateRequest(BaseModel):
                 "빈 값은 저장하지 않습니다."
             ),
             examples=["신규 제조사 등록"],
+            json_schema_extra={"x-normalized-maxLength": 500},
+        ),
+    ] = None
+
+
+class CompanyValueUpdateRequest(BaseModel):
+    """Company Dimension value 수정 입력입니다."""
+
+    model_config = ConfigDict(extra="forbid")
+    value: Annotated[
+        StrictStr,
+        Field(
+            min_length=1,
+            description=(
+                "새 Company 값입니다. 생성 입력과 같은 규칙으로 정규화하며, 현재 값과 같으면 "
+                "상태와 감사 로그를 변경하지 않습니다."
+            ),
+            examples=[" Apple Korea "],
+            json_schema_extra={
+                "x-normalized-pattern": "^[A-Z0-9]+(?:_[A-Z0-9]+)*$",
+                "x-normalized-minLength": 1,
+                "x-normalized-maxLength": 128,
+            },
+        ),
+    ]
+    reason: Annotated[
+        StrictStr | None,
+        Field(
+            description=(
+                "수정 이유입니다. 앞뒤 일반 공백을 제거한 결과가 500자 이하여야 하며, "
+                "빈 값은 저장하지 않습니다."
+            ),
+            examples=["회사명 정정"],
             json_schema_extra={"x-normalized-maxLength": 500},
         ),
     ] = None
@@ -261,6 +300,7 @@ def build_company_router(
     create_company: CreateCompany,
     get_company: GetCompany,
     list_companies: ListCompanies,
+    update_company: UpdateCompanyValue,
     principal_dependency: Callable[..., HumanPrincipal],
     authorization: AuthorizationPolicy,
 ) -> APIRouter:
@@ -400,7 +440,83 @@ def build_company_router(
         response.headers["ETag"] = _etag(company.version)
         return _company_response(company)
 
+    @router.patch(
+        "/{company_id}",
+        operation_id="update_company_dimension_value",
+        response_model=CompanyResponse,
+        status_code=status.HTTP_200_OK,
+        summary="Company Dimension 값 수정",
+        description=(
+            "ADMIN 또는 SUPER_ADMIN이 직전 단건 응답의 강한 ETag를 If-Match로 제공해 "
+            "Company value만 조건부로 수정합니다. code 수정은 이 엔드포인트에서 허용하지 "
+            "않으며, 정규화한 값이 현재 값과 같으면 version·시각·감사 로그를 변경하지 않습니다."
+        ),
+        responses={
+            status.HTTP_200_OK: {
+                "description": "현재 Company Dimension 상태를 반환합니다.",
+                "headers": {
+                    "ETag": {
+                        "description": "응답 본문 version과 같은 현재 강한 ETag입니다.",
+                        "schema": {"type": "string", "example": '"1"'},
+                    }
+                },
+            },
+            status.HTTP_401_UNAUTHORIZED: INVALID_ACCESS_TOKEN_RESPONSE,
+            status.HTTP_403_FORBIDDEN: AUTHORIZATION_DENIED_RESPONSE,
+            status.HTTP_404_NOT_FOUND: NOT_FOUND_RESPONSE,
+            status.HTTP_409_CONFLICT: _update_conflict_response(),
+            status.HTTP_422_UNPROCESSABLE_CONTENT: _validation_response(
+                description="Company 수정 입력값이 유효하지 않습니다.", field="body.value"
+            ),
+            status.HTTP_503_SERVICE_UNAVAILABLE: SERVICE_UNAVAILABLE_RESPONSE,
+            **dimension_precondition_responses(),
+        },
+    )
+    async def update_company_dimension_value(
+        company_id: Annotated[
+            UUID, Path(description="수정할 Company Dimension의 UUID 식별자입니다.")
+        ],
+        payload: CompanyValueUpdateRequest,
+        request: Request,
+        response: Response,
+        principal: Annotated[HumanPrincipal, Depends(mutation_guard)],
+        if_match: DimensionIfMatchHeader,
+    ) -> CompanyResponse:
+        expected_version = parse_dimension_if_match_values(request.headers.getlist("if-match"))
+        try:
+            company = await update_company.execute(
+                principal,
+                company_id,
+                expected_version=expected_version,
+                value=payload.value,
+                reason=payload.reason,
+            )
+        except DimensionValidationError as error:
+            raise DimensionValidationError(f"body.{error.field}", error.message) from error
+        response.headers["ETag"] = _etag(company.version)
+        return _company_response(company)
+
     return router
+
+
+def _update_conflict_response() -> dict[str, Any]:
+    return {
+        "model": ProblemDetails,
+        "description": "정규화된 Company value가 이미 사용 중입니다.",
+        "content": {
+            "application/problem+json": {
+                "schema": {"$ref": "#/components/schemas/ProblemDetails"},
+                "example": {
+                    "type": "/problems/dimension-value-conflict",
+                    "title": "Dimension 값 충돌",
+                    "status": 409,
+                    "detail": "정규화된 Company 값이 이미 사용 중입니다.",
+                    "code": "DIMENSION_VALUE_CONFLICT",
+                    "violations": [{"field": "body.value", "message": "이미 사용 중인 값입니다."}],
+                },
+            }
+        },
+    }
 
 
 def _company_response(company: Dimension[CompanyValue]) -> CompanyResponse:

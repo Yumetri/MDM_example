@@ -18,12 +18,15 @@ from mdm.api.errors import (
     company_repository_unavailable_handler,
     dimension_validation_error_handler,
     invalid_access_token_handler,
+    invalid_if_match_handler,
     memory_dimension_conflict_handler,
     memory_dimension_not_found_handler,
     memory_dimension_repository_unavailable_handler,
     numeric_dimension_conflict_handler,
     numeric_dimension_not_found_handler,
     numeric_dimension_repository_unavailable_handler,
+    precondition_failed_handler,
+    precondition_required_handler,
     readiness_unavailable_handler,
     string_dimension_conflict_handler,
     string_dimension_not_found_handler,
@@ -53,6 +56,7 @@ from mdm.application.dimensions import (
     CreateCompany,
     GetCompany,
     ListCompanies,
+    UpdateCompanyValue,
 )
 from mdm.application.health import CheckReadiness, ReadinessCheck, ReadinessUnavailable
 from mdm.application.memory_dimensions import (
@@ -64,6 +68,7 @@ from mdm.application.memory_dimensions import (
     MemoryDimensionNotFound,
     MemoryDimensionRepositoryUnavailable,
     MemoryDimensionValueConflict,
+    UpdateMemoryValue,
 )
 from mdm.application.numeric_dimensions import (
     CreateNetwork,
@@ -77,7 +82,10 @@ from mdm.application.numeric_dimensions import (
     NumericDimensionNotFound,
     NumericDimensionRepositoryUnavailable,
     NumericDimensionValueConflict,
+    UpdateNetworkValue,
+    UpdateYearValue,
 )
+from mdm.application.preconditions import InvalidIfMatch, PreconditionFailed, PreconditionRequired
 from mdm.application.string_dimensions import (
     CreateBrand,
     CreateCategory,
@@ -96,6 +104,10 @@ from mdm.application.string_dimensions import (
     StringDimensionNotFound,
     StringDimensionRepositoryUnavailable,
     StringDimensionValueConflict,
+    UpdateBrandValue,
+    UpdateCategoryValue,
+    UpdateCountryValue,
+    UpdateModelValue,
 )
 from mdm.domain.dimensions import DimensionValidationError
 from mdm.infrastructure.database import (
@@ -158,6 +170,7 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
             ),
             get_company=GetCompany(repository, authorization),
             list_companies=ListCompanies(repository, authorization),
+            update_company=UpdateCompanyValue(repository, authorization, audit_factory),
             principal_dependency=principal_dependency,
             authorization=authorization,
         )
@@ -167,6 +180,7 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
                 create_dimension=CreateModel(model_repository, authorization, audit_factory),
                 get_dimension=GetModel(model_repository, authorization),
                 list_dimensions=ListModels(model_repository, authorization),
+                update_dimension=UpdateModelValue(model_repository, authorization, audit_factory),
                 principal_dependency=principal_dependency,
                 authorization=authorization,
             )
@@ -177,6 +191,7 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
                 create_dimension=CreateBrand(brand_repository, authorization, audit_factory),
                 get_dimension=GetBrand(brand_repository, authorization),
                 list_dimensions=ListBrands(brand_repository, authorization),
+                update_dimension=UpdateBrandValue(brand_repository, authorization, audit_factory),
                 principal_dependency=principal_dependency,
                 authorization=authorization,
             )
@@ -187,6 +202,9 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
                 create_dimension=CreateCountry(country_repository, authorization, audit_factory),
                 get_dimension=GetCountry(country_repository, authorization),
                 list_dimensions=ListCountries(country_repository, authorization),
+                update_dimension=UpdateCountryValue(
+                    country_repository, authorization, audit_factory
+                ),
                 principal_dependency=principal_dependency,
                 authorization=authorization,
             )
@@ -197,6 +215,9 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
                 create_dimension=CreateCategory(category_repository, authorization, audit_factory),
                 get_dimension=GetCategory(category_repository, authorization),
                 list_dimensions=ListCategories(category_repository, authorization),
+                update_dimension=UpdateCategoryValue(
+                    category_repository, authorization, audit_factory
+                ),
                 principal_dependency=principal_dependency,
                 authorization=authorization,
             )
@@ -207,6 +228,7 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
                 create_dimension=CreateYear(year_repository, authorization, audit_factory),
                 get_dimension=GetYear(year_repository, authorization),
                 list_dimensions=ListYears(year_repository, authorization),
+                update_dimension=UpdateYearValue(year_repository, authorization, audit_factory),
                 principal_dependency=principal_dependency,
                 authorization=authorization,
             )
@@ -216,6 +238,7 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
             create_memory=CreateMemory(memory_repository, authorization, audit_factory),
             get_memory=GetMemory(memory_repository, authorization),
             list_memories=ListMemories(memory_repository, authorization),
+            update_memory=UpdateMemoryValue(memory_repository, authorization, audit_factory),
             principal_dependency=principal_dependency,
             authorization=authorization,
         )
@@ -225,6 +248,9 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
                 create_dimension=CreateNetwork(network_repository, authorization, audit_factory),
                 get_dimension=GetNetwork(network_repository, authorization),
                 list_dimensions=ListNetworks(network_repository, authorization),
+                update_dimension=UpdateNetworkValue(
+                    network_repository, authorization, audit_factory
+                ),
                 principal_dependency=principal_dependency,
                 authorization=authorization,
             )
@@ -250,35 +276,35 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
             },
             {
                 "name": "Company Dimensions",
-                "description": "Company Dimension을 생성하고 활성 데이터를 조회합니다.",
+                "description": "Company Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
             },
             {
                 "name": "Model Dimensions",
-                "description": "Model Dimension을 생성하고 활성 데이터를 조회합니다.",
+                "description": "Model Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
             },
             {
                 "name": "Brand Dimensions",
-                "description": "Brand Dimension을 생성하고 활성 데이터를 조회합니다.",
+                "description": "Brand Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
             },
             {
                 "name": "Country Dimensions",
-                "description": "Country Dimension을 생성하고 활성 데이터를 조회합니다.",
+                "description": "Country Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
             },
             {
                 "name": "Category Dimensions",
-                "description": "Category Dimension을 생성하고 활성 데이터를 조회합니다.",
+                "description": "Category Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
             },
             {
                 "name": "Year Dimensions",
-                "description": "Year Dimension을 생성하고 활성 데이터를 조회합니다.",
+                "description": "Year Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
             },
             {
                 "name": "Network Dimensions",
-                "description": "Network Dimension을 생성하고 활성 데이터를 조회합니다.",
+                "description": "Network Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
             },
             {
                 "name": "Memory Dimensions",
-                "description": "Memory Dimension을 생성하고 활성 데이터를 조회합니다.",
+                "description": "Memory Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
             },
         ],
         docs_url=None,
@@ -297,6 +323,9 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         DimensionValidationError,
         dimension_validation_error_handler,
     )
+    application.add_exception_handler(PreconditionRequired, precondition_required_handler)
+    application.add_exception_handler(InvalidIfMatch, invalid_if_match_handler)
+    application.add_exception_handler(PreconditionFailed, precondition_failed_handler)
     application.add_exception_handler(CompanyNotFound, company_not_found_handler)
     application.add_exception_handler(
         CompanyRepositoryUnavailable, company_repository_unavailable_handler

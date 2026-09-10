@@ -15,6 +15,7 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mdm.application.audit import MutationAuditContextUnavailable
+from mdm.application.preconditions import PreconditionFailed
 from mdm.application.string_dimensions import (
     StringDimensionCodeConflict,
     StringDimensionCursor,
@@ -113,6 +114,58 @@ class _SqlAlchemyStringDimensionRepository[
         if record is None:
             raise StringDimensionNotFound(self._dimension_name)
         return self._to_domain(record)
+
+    async def update_value(
+        self,
+        dimension_id: UUID,
+        expected_version: int,
+        value: ValueT,
+        audit: MutationAuditMetadata,
+    ) -> Dimension[ValueT]:
+        try:
+            async with self._session_factory.begin() as session:
+                record = await session.scalar(
+                    select(self._record_type)
+                    .where(
+                        self._record_type.id == dimension_id,
+                        self._record_type.deleted_at.is_(None),
+                    )
+                    .with_for_update()
+                )
+                if record is None:
+                    raise StringDimensionNotFound(self._dimension_name)
+                current = self._to_domain(record)
+                if current.version != expected_version:
+                    raise PreconditionFailed
+                if current.value == value:
+                    return current
+                conflict = await session.scalar(
+                    select(self._record_type.id).where(
+                        self._record_type.id != dimension_id,
+                        self._record_type.value == value.value,
+                    )
+                )
+                if conflict is not None:
+                    raise StringDimensionValueConflict(self._dimension_name)
+
+                changed_at = await SqlAlchemyMutationAuditContextWriter(session).set_context(
+                    audit, minimum_timestamp=current.updated_at
+                )
+                changed = current.change_value(value, changed_at=changed_at)
+                record.value = changed.value.value
+                record.version = changed.version
+                record.updated_at = changed.updated_at
+                await session.flush()
+                return self._to_domain(record)
+        except IntegrityError as error:
+            if _constraint_name(error) == f"uq_{self._table_name}_value":
+                raise StringDimensionValueConflict(self._dimension_name) from None
+            raise
+        except MutationAuditContextUnavailable:
+            raise StringDimensionRepositoryUnavailable from None
+        except SQLAlchemyError as error:
+            _raise_if_temporarily_unavailable(error)
+            raise
 
     async def list_active(
         self,
