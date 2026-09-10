@@ -18,6 +18,13 @@ from mdm.application.dimensions import (
     CompanyValueConflict,
 )
 from mdm.application.health import ReadinessUnavailable
+from mdm.application.memory_dimensions import (
+    MemoryDimensionCodeConflict,
+    MemoryDimensionMultipleConflicts,
+    MemoryDimensionNotFound,
+    MemoryDimensionRepositoryUnavailable,
+    MemoryDimensionValueConflict,
+)
 from mdm.application.numeric_dimensions import (
     NumericDimensionCodeConflict,
     NumericDimensionMultipleConflicts,
@@ -317,6 +324,85 @@ async def numeric_dimension_conflict_handler(request: Request, exc: Exception) -
             "dimension-multiple-conflicts",
             "여러 Dimension 필드 충돌",
             f"{name} 대표 코드와 값이 모두 이미 사용 중입니다.",
+            "DIMENSION_MULTIPLE_CONFLICTS",
+            [
+                FieldViolation(field="body.code", message="이미 사용 중인 값입니다."),
+                FieldViolation(field="body.value", message="이미 사용 중인 값입니다."),
+            ],
+        )
+    return problem_response(
+        ProblemDetails(
+            type=f"/problems/{slug}",
+            title=title,
+            status=409,
+            detail=detail,
+            code=code,
+            instance=request.url.path,
+            violations=violations,
+        )
+    )
+
+
+async def memory_dimension_not_found_handler(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, MemoryDimensionNotFound)
+    return problem_response(
+        ProblemDetails(
+            type="/problems/dimension-not-found",
+            title="Dimension을 찾을 수 없음",
+            status=404,
+            detail="요청한 활성 Memory Dimension을 찾을 수 없습니다.",
+            code="DIMENSION_NOT_FOUND",
+            instance=request.url.path,
+        )
+    )
+
+
+async def memory_dimension_repository_unavailable_handler(
+    request: Request, exc: Exception
+) -> JSONResponse:
+    assert isinstance(exc, MemoryDimensionRepositoryUnavailable)
+    return problem_response(
+        ProblemDetails(
+            type="/problems/service-unavailable",
+            title="서비스를 사용할 수 없음",
+            status=503,
+            detail="요청을 일시적으로 처리할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+            code="SERVICE_UNAVAILABLE",
+            instance=request.url.path,
+        )
+    )
+
+
+async def memory_dimension_conflict_handler(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(
+        exc,
+        (
+            MemoryDimensionCodeConflict,
+            MemoryDimensionValueConflict,
+            MemoryDimensionMultipleConflicts,
+        ),
+    )
+    if isinstance(exc, MemoryDimensionCodeConflict):
+        slug, title, detail, code, violations = (
+            "dimension-code-conflict",
+            "Dimension 대표 코드 충돌",
+            "정규화된 Memory 대표 코드가 이미 사용 중입니다.",
+            "DIMENSION_CODE_CONFLICT",
+            [FieldViolation(field="body.code", message="이미 사용 중인 값입니다.")],
+        )
+    elif isinstance(exc, MemoryDimensionValueConflict):
+        slug, title, detail, code, violations = (
+            "dimension-value-conflict",
+            "Dimension 값 충돌",
+            "동등한 Memory 용량이 이미 사용 중입니다.",
+            "DIMENSION_VALUE_CONFLICT",
+            [FieldViolation(field="body.value", message="이미 사용 중인 값입니다.")],
+        )
+    else:
+        slug, title, detail, code, violations = (
+            "dimension-multiple-conflicts",
+            "여러 Dimension 필드 충돌",
+            "Memory 대표 코드와 동등한 용량이 모두 이미 사용 중입니다.",
             "DIMENSION_MULTIPLE_CONFLICTS",
             [
                 FieldViolation(field="body.code", message="이미 사용 중인 값입니다."),

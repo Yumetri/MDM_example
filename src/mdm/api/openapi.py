@@ -15,7 +15,16 @@ def configure_openapi(application: FastAPI) -> None:
                 if "application/problem+json" in content:
                     content.pop("application/json", None)
     schemas = schema.get("components", {}).get("schemas", {})
-    for name in ("Company", "Model", "Brand", "Country", "Category", "Year", "Network"):
+    for name in (
+        "Company",
+        "Model",
+        "Brand",
+        "Country",
+        "Category",
+        "Year",
+        "Network",
+        "Memory",
+    ):
         response_schema = schemas.get(f"{name}Response")
         if response_schema is not None:
             response_schema["example"]["deleted_at"] = None
