@@ -15,6 +15,8 @@ from mdm.application.numeric_dimensions import (
     ListYears,
     NumericDimensionCursor,
     NumericDimensionPage,
+    UpdateNetworkValue,
+    UpdateYearValue,
 )
 from mdm.domain.audit import DimensionOperation, MutationAuditMetadata
 from mdm.domain.auth import UserRole
@@ -45,6 +47,7 @@ class RecordingRepository:
         self.create_call: tuple[DimensionCode, object, MutationAuditMetadata] | None = None
         self.get_call: UUID | None = None
         self.list_call: tuple[NumericDimensionCursor | None, int] | None = None
+        self.update_call: tuple[UUID, int, object, MutationAuditMetadata] | None = None
 
     async def create(self, code, value, audit):
         self.create_call = (code, value, audit)
@@ -58,10 +61,14 @@ class RecordingRepository:
         self.list_call = (after, limit)
         return NumericDimensionPage(items=(self.dimension,), has_more=False)
 
+    async def update_value(self, dimension_id, expected_version, value, audit):
+        self.update_call = (dimension_id, expected_version, value, audit)
+        return self.dimension
+
 
 CASES = (
-    (CreateYear, GetYear, ListYears, YearValue, 2026),
-    (CreateNetwork, GetNetwork, ListNetworks, NetworkGeneration, 5),
+    (CreateYear, GetYear, ListYears, UpdateYearValue, YearValue, 2026, 2027),
+    (CreateNetwork, GetNetwork, ListNetworks, UpdateNetworkValue, NetworkGeneration, 5, 4),
 )
 
 
@@ -70,13 +77,18 @@ def _principal(role: UserRole) -> HumanPrincipal:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(("create_type", "get_type", "list_type", "value_type", "raw"), CASES)
+@pytest.mark.parametrize(
+    ("create_type", "get_type", "list_type", "_update_type", "value_type", "raw", "_other"),
+    CASES,
+)
 async def test_numeric_dimension_use_cases_keep_type_boundaries_and_common_policy(
     create_type: type,
     get_type: type,
     list_type: type,
+    _update_type: type,
     value_type: type,
     raw: int,
+    _other: int,
 ) -> None:
     repository = RecordingRepository(value_type(raw))
     policy = AuthorizationPolicy()
@@ -111,13 +123,18 @@ async def test_numeric_dimension_use_cases_keep_type_boundaries_and_common_polic
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(("create_type", "_get_type", "_list_type", "value_type", "raw"), CASES)
+@pytest.mark.parametrize(
+    ("create_type", "_get_type", "_list_type", "_update_type", "value_type", "raw", "_other"),
+    CASES,
+)
 async def test_user_cannot_create_any_numeric_dimension(
     create_type: type,
     _get_type: type,
     _list_type: type,
+    _update_type: type,
     value_type: type,
     raw: int,
+    _other: int,
 ) -> None:
     repository = RecordingRepository(value_type(raw))
     create = create_type(
@@ -130,3 +147,40 @@ async def test_user_cannot_create_any_numeric_dimension(
         await create.execute(_principal(UserRole.USER), code="VALUE1", value=raw, reason=None)
 
     assert repository.create_call is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("_create_type", "_get_type", "_list_type", "update_type", "value_type", "raw", "other"),
+    CASES,
+)
+async def test_admin_updates_each_numeric_dimension_value(
+    _create_type: type,
+    _get_type: type,
+    _list_type: type,
+    update_type: type,
+    value_type: type,
+    raw: int,
+    other: int,
+) -> None:
+    repository = RecordingRepository(value_type(raw))
+    update = update_type(
+        repository,
+        AuthorizationPolicy(),
+        HumanMutationAuditFactory(change_set_ids=lambda: CHANGE_SET_ID),
+    )
+
+    await update.execute(
+        _principal(UserRole.SUPER_ADMIN),
+        DIMENSION_ID,
+        expected_version=2,
+        value=other,
+        reason=None,
+    )
+
+    assert repository.update_call is not None
+    dimension_id, version, value, audit = repository.update_call
+    assert dimension_id == DIMENSION_ID
+    assert version == 2
+    assert value == value_type(other)
+    assert audit.operations.dimension is DimensionOperation.UPDATE

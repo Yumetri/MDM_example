@@ -84,6 +84,16 @@ class CompanyRepository(Protocol):
         """Return active Companies in descending (created_at, id) order."""
         ...
 
+    async def update_value(
+        self,
+        company_id: UUID,
+        expected_version: int,
+        value: CompanyValue,
+        audit: MutationAuditMetadata,
+    ) -> Dimension[CompanyValue]:
+        """Conditionally replace one active Company's value."""
+        ...
+
 
 class CreateCompany:
     """Authorize and create one normalized Company with trusted audit metadata."""
@@ -120,6 +130,47 @@ class CreateCompany:
                 "reason", "유효한 변경 사유를 입력해야 합니다."
             ) from error
         return await self._repository.create(normalized_code, normalized_value, audit)
+
+
+class UpdateCompanyValue:
+    """Authorize and conditionally replace one Company's normalized value."""
+
+    def __init__(
+        self,
+        repository: CompanyRepository,
+        authorization: AuthorizationPolicy,
+        audit_factory: HumanMutationAuditFactory,
+    ) -> None:
+        self._repository = repository
+        self._authorization = authorization
+        self._audit_factory = audit_factory
+
+    async def execute(
+        self,
+        principal: HumanPrincipal,
+        company_id: UUID,
+        *,
+        expected_version: int,
+        value: str,
+        reason: str | None,
+    ) -> Dimension[CompanyValue]:
+        self._authorization.authorize(principal, AuthorizationAction.MUTATE_DATA)
+        if type(expected_version) is not int or expected_version < 1:
+            raise ValueError("expected version must be a positive integer")
+        normalized_value = CompanyValue(value)
+        try:
+            audit = self._audit_factory.create(
+                principal,
+                dimension_operation=DimensionOperation.UPDATE,
+                reason=reason,
+            )
+        except AuditInvariantError as error:
+            raise DimensionValidationError(
+                "reason", "유효한 변경 사유를 입력해야 합니다."
+            ) from error
+        return await self._repository.update_value(
+            company_id, expected_version, normalized_value, audit
+        )
 
 
 class GetCompany:

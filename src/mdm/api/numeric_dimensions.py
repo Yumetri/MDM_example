@@ -8,11 +8,16 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Path, Query, Response, status
+from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from mdm.api.auth import INVALID_ACCESS_TOKEN_RESPONSE
 from mdm.api.authorization import AUTHORIZATION_DENIED_RESPONSE, build_authorization_guard
+from mdm.api.preconditions import (
+    DimensionIfMatchHeader,
+    dimension_precondition_responses,
+    parse_dimension_if_match_values,
+)
 from mdm.api.schemas import ProblemDetails
 from mdm.application.auth import HumanPrincipal
 from mdm.application.authorization import AuthorizationAction, AuthorizationPolicy
@@ -25,6 +30,8 @@ from mdm.application.numeric_dimensions import (
     ListYears,
     NumericDimensionCursor,
     NumericDimensionPage,
+    UpdateNetworkValue,
+    UpdateYearValue,
 )
 from mdm.domain.dimensions import Dimension, DimensionValidationError
 
@@ -61,13 +68,13 @@ def _code_field(example: str) -> Any:
     )
 
 
-def _reason_field() -> Any:
+def _reason_field(action: str = "생성") -> Any:
     return Field(
         description=(
-            "생성 이유입니다. 앞뒤 일반 공백을 제거한 결과가 500자 이하여야 하며, "
+            f"{action} 이유입니다. 앞뒤 일반 공백을 제거한 결과가 500자 이하여야 하며, "
             "빈 값은 저장하지 않습니다."
         ),
-        examples=["신규 기준정보 등록"],
+        examples=["값 수정" if action == "수정" else "신규 기준정보 등록"],
         json_schema_extra={"x-normalized-maxLength": 500},
     )
 
@@ -112,6 +119,44 @@ class NetworkCreateRequest(_NumericDimensionCreateRequest):
         ),
     ]
     reason: Annotated[StrictStr | None, _reason_field()] = None
+
+
+class _NumericDimensionValueUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    value: StrictInt
+    reason: Annotated[StrictStr | None, _reason_field("수정")] = None
+
+
+class YearValueUpdateRequest(_NumericDimensionValueUpdateRequest):
+    """Year Dimension value 수정 입력입니다."""
+
+    model_config = ConfigDict(extra="forbid")
+    value: Annotated[
+        StrictInt,
+        Field(
+            ge=2000,
+            le=2999,
+            description="새 Year 값이며 문자열·boolean·실수 변환을 허용하지 않습니다.",
+            examples=[2027],
+        ),
+    ]
+    reason: Annotated[StrictStr | None, _reason_field("수정")] = None
+
+
+class NetworkValueUpdateRequest(_NumericDimensionValueUpdateRequest):
+    """Network Dimension value 수정 입력입니다."""
+
+    model_config = ConfigDict(extra="forbid")
+    value: Annotated[
+        StrictInt,
+        Field(
+            ge=1,
+            le=5,
+            description="새 Network 세대 값이며 문자열·boolean·실수 변환을 허용하지 않습니다.",
+            examples=[4],
+        ),
+    ]
+    reason: Annotated[StrictStr | None, _reason_field("수정")] = None
 
 
 class _NumericDimensionResponse(BaseModel):
@@ -190,6 +235,7 @@ class _RouterConfig:
     collection: str
     tag: str
     request_model: type[_NumericDimensionCreateRequest]
+    update_request_model: type[_NumericDimensionValueUpdateRequest]
     response_model: type[_NumericDimensionResponse]
     list_model: type[BaseModel]
 
@@ -199,6 +245,7 @@ def build_year_router(
     create_dimension: CreateYear,
     get_dimension: GetYear,
     list_dimensions: ListYears,
+    update_dimension: UpdateYearValue,
     principal_dependency: Callable[..., HumanPrincipal],
     authorization: AuthorizationPolicy,
 ) -> APIRouter:
@@ -209,12 +256,14 @@ def build_year_router(
             "years",
             "Year Dimensions",
             YearCreateRequest,
+            YearValueUpdateRequest,
             YearResponse,
             YearListResponse,
         ),
         create_dimension=create_dimension,
         get_dimension=get_dimension,
         list_dimensions=list_dimensions,
+        update_dimension=update_dimension,
         principal_dependency=principal_dependency,
         authorization=authorization,
     )
@@ -225,6 +274,7 @@ def build_network_router(
     create_dimension: CreateNetwork,
     get_dimension: GetNetwork,
     list_dimensions: ListNetworks,
+    update_dimension: UpdateNetworkValue,
     principal_dependency: Callable[..., HumanPrincipal],
     authorization: AuthorizationPolicy,
 ) -> APIRouter:
@@ -235,12 +285,14 @@ def build_network_router(
             "networks",
             "Network Dimensions",
             NetworkCreateRequest,
+            NetworkValueUpdateRequest,
             NetworkResponse,
             NetworkListResponse,
         ),
         create_dimension=create_dimension,
         get_dimension=get_dimension,
         list_dimensions=list_dimensions,
+        update_dimension=update_dimension,
         principal_dependency=principal_dependency,
         authorization=authorization,
     )
@@ -252,6 +304,7 @@ def _build_router(
     create_dimension: Any,
     get_dimension: Any,
     list_dimensions: Any,
+    update_dimension: Any,
     principal_dependency: Callable[..., HumanPrincipal],
     authorization: AuthorizationPolicy,
 ) -> APIRouter:
@@ -364,6 +417,50 @@ def _build_router(
             "반환합니다."
         ),
         responses=_get_responses(config.display_name),
+    )
+
+    async def update_route(
+        dimension_id: Annotated[
+            UUID,
+            Path(description=f"수정할 {config.display_name} Dimension의 UUID 식별자입니다."),
+        ],
+        payload: _NumericDimensionValueUpdateRequest,
+        request: Request,
+        response: Response,
+        principal: Annotated[HumanPrincipal, Depends(mutation_guard)],
+        if_match: DimensionIfMatchHeader,
+    ) -> _NumericDimensionResponse:
+        expected_version = parse_dimension_if_match_values(request.headers.getlist("if-match"))
+        try:
+            dimension = await update_dimension.execute(
+                principal,
+                dimension_id,
+                expected_version=expected_version,
+                value=payload.value,
+                reason=payload.reason,
+            )
+        except DimensionValidationError as error:
+            raise DimensionValidationError(f"body.{error.field}", error.message) from error
+        response.headers["ETag"] = _etag(dimension.version)
+        return _response(dimension, config.response_model)
+
+    update_route.__name__ = f"update_{config.singular}_dimension_value"
+    update_route.__annotations__["payload"] = config.update_request_model
+    update_route.__annotations__["return"] = config.response_model
+    router.add_api_route(
+        "/{dimension_id}",
+        update_route,
+        methods=["PATCH"],
+        operation_id=f"update_{config.singular}_dimension_value",
+        response_model=config.response_model,
+        status_code=status.HTTP_200_OK,
+        summary=f"{config.display_name} Dimension 값 수정",
+        description=(
+            f"ADMIN 또는 SUPER_ADMIN이 강한 If-Match로 {config.display_name} value만 조건부로 "
+            "수정합니다. code 입력은 허용하지 않으며, 같은 값이면 version·시각·감사 로그를 "
+            "변경하지 않습니다."
+        ),
+        responses=_update_responses(config.display_name),
     )
     return router
 
@@ -559,6 +656,39 @@ def _get_responses(name: str) -> dict[int | str, dict[str, Any]]:
             description=f"{name} 식별자 형식이 유효하지 않습니다.", field="path.dimension_id"
         ),
         503: _service_unavailable_response(name),
+    }
+
+
+def _update_responses(name: str) -> dict[int | str, dict[str, Any]]:
+    return {
+        200: {
+            "description": f"현재 {name} Dimension 상태를 반환합니다.",
+            "headers": {
+                "ETag": {
+                    "description": "응답 본문 version과 같은 현재 강한 ETag입니다.",
+                    "schema": {"type": "string", "example": '"1"'},
+                }
+            },
+        },
+        401: INVALID_ACCESS_TOKEN_RESPONSE,
+        403: AUTHORIZATION_DENIED_RESPONSE,
+        404: _get_responses(name)[404],
+        409: _problem_response(
+            description=f"{name} value가 이미 사용 중입니다.",
+            example={
+                "type": "/problems/dimension-value-conflict",
+                "title": "Dimension 값 충돌",
+                "status": 409,
+                "detail": f"{name} 값이 이미 사용 중입니다.",
+                "code": "DIMENSION_VALUE_CONFLICT",
+                "violations": [{"field": "body.value", "message": "이미 사용 중인 값입니다."}],
+            },
+        ),
+        422: _validation_response(
+            description=f"{name} 수정 입력값이 유효하지 않습니다.", field="body.value"
+        ),
+        503: _service_unavailable_response(name),
+        **dimension_precondition_responses(),
     }
 
 

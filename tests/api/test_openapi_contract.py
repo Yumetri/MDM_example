@@ -100,35 +100,35 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
         },
         {
             "name": "Company Dimensions",
-            "description": "Company Dimension을 생성하고 활성 데이터를 조회합니다.",
+            "description": "Company Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
         },
         {
             "name": "Model Dimensions",
-            "description": "Model Dimension을 생성하고 활성 데이터를 조회합니다.",
+            "description": "Model Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
         },
         {
             "name": "Brand Dimensions",
-            "description": "Brand Dimension을 생성하고 활성 데이터를 조회합니다.",
+            "description": "Brand Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
         },
         {
             "name": "Country Dimensions",
-            "description": "Country Dimension을 생성하고 활성 데이터를 조회합니다.",
+            "description": "Country Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
         },
         {
             "name": "Category Dimensions",
-            "description": "Category Dimension을 생성하고 활성 데이터를 조회합니다.",
+            "description": "Category Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
         },
         {
             "name": "Year Dimensions",
-            "description": "Year Dimension을 생성하고 활성 데이터를 조회합니다.",
+            "description": "Year Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
         },
         {
             "name": "Network Dimensions",
-            "description": "Network Dimension을 생성하고 활성 데이터를 조회합니다.",
+            "description": "Network Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
         },
         {
             "name": "Memory Dimensions",
-            "description": "Memory Dimension을 생성하고 활성 데이터를 조회합니다.",
+            "description": "Memory Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
         },
     ]
 
@@ -192,7 +192,7 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
         "detail": "해당 문제 발생의 구체적인 원인을 설명하는 사용자용 문구입니다.",
         "code": "안정적이고 기계 판독 가능한 서비스 오류 코드입니다.",
         "instance": "이 문제 발생을 식별하는 URI 참조입니다.",
-        "violations": "입력값 검증 실패 시 유효하지 않은 필드 목록입니다.",
+        "violations": "입력값 검증 또는 충돌과 관련된 필드별 문제 목록입니다.",
     }
 
 
@@ -201,7 +201,7 @@ def test_company_routes_are_registered_in_the_production_schema() -> None:
     paths = app.openapi()["paths"]
 
     assert set(paths["/dimensions/companies"]) >= {"get", "post"}
-    assert "get" in paths["/dimensions/companies/{company_id}"]
+    assert set(paths["/dimensions/companies/{company_id}"]) >= {"get", "patch"}
 
 
 @pytest.mark.api
@@ -210,7 +210,7 @@ def test_string_dimension_routes_are_registered_in_the_production_schema() -> No
 
     for collection in ("models", "brands", "countries", "categories"):
         assert set(paths[f"/dimensions/{collection}"]) >= {"get", "post"}
-        assert "get" in paths[f"/dimensions/{collection}/{{dimension_id}}"]
+        assert set(paths[f"/dimensions/{collection}/{{dimension_id}}"]) >= {"get", "patch"}
 
 
 @pytest.mark.api

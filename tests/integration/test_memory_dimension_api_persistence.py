@@ -112,6 +112,22 @@ async def test_memory_routes_cross_real_auth_repository_generation_and_audit(
                     "actor_role": "SUPER_ADMIN",
                 },
             )
+            equivalent_update = await client.patch(
+                f"/dimensions/memories/{created.json()['id']}",
+                headers={
+                    "Authorization": f"Bearer {admin_token}",
+                    "If-Match": created.headers["etag"],
+                },
+                json={"value": {"amount": 1000, "unit": "GB"}},
+            )
+            updated = await client.patch(
+                f"/dimensions/memories/{created.json()['id']}",
+                headers={
+                    "Authorization": f"Bearer {admin_token}",
+                    "If-Match": equivalent_update.headers["etag"],
+                },
+                json={"value": {"amount": 2, "unit": "TB"}, "reason": "용량 수정"},
+            )
 
     assert denied.status_code == 403
     assert denied.json()["code"] == "AUTHORIZATION_DENIED"
@@ -134,3 +150,13 @@ async def test_memory_routes_cross_real_auth_repository_generation_and_audit(
     assert invalid_unit.status_code == 422
     assert invalid_unit.json()["violations"][0]["field"] == "body.value.unit"
     assert spoofed.status_code == 422
+    assert equivalent_update.status_code == 200
+    assert equivalent_update.headers["etag"] == '"1"'
+    assert equivalent_update.json()["value"] == created.json()["value"]
+    assert updated.status_code == 200
+    assert updated.headers["etag"] == '"2"'
+    assert updated.json()["value"] == {
+        "amount": 2,
+        "unit": "TB",
+        "capacity_mb": 2_000_000,
+    }

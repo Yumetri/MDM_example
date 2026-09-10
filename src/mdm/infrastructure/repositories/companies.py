@@ -25,6 +25,7 @@ from mdm.application.dimensions import (
     CompanyRepositoryUnavailable,
     CompanyValueConflict,
 )
+from mdm.application.preconditions import PreconditionFailed
 from mdm.domain.audit import MutationAuditMetadata
 from mdm.domain.dimensions import CompanyValue, Dimension, DimensionCode
 from mdm.infrastructure.audit_context import SqlAlchemyMutationAuditContextWriter
@@ -92,6 +93,58 @@ class SqlAlchemyCompanyRepository:
         if record is None:
             raise CompanyNotFound
         return _to_domain(record)
+
+    async def update_value(
+        self,
+        company_id: UUID,
+        expected_version: int,
+        value: CompanyValue,
+        audit: MutationAuditMetadata,
+    ) -> Dimension[CompanyValue]:
+        try:
+            async with self._session_factory.begin() as session:
+                record = await session.scalar(
+                    select(CompanyRecord)
+                    .where(
+                        CompanyRecord.id == company_id,
+                        CompanyRecord.deleted_at.is_(None),
+                    )
+                    .with_for_update()
+                )
+                if record is None:
+                    raise CompanyNotFound
+                current = _to_domain(record)
+                if current.version != expected_version:
+                    raise PreconditionFailed
+                if current.value == value:
+                    return current
+                conflict = await session.scalar(
+                    select(CompanyRecord.id).where(
+                        CompanyRecord.id != company_id,
+                        CompanyRecord.value == value.value,
+                    )
+                )
+                if conflict is not None:
+                    raise CompanyValueConflict
+
+                changed_at = await SqlAlchemyMutationAuditContextWriter(session).set_context(
+                    audit, minimum_timestamp=current.updated_at
+                )
+                changed = current.change_value(value, changed_at=changed_at)
+                record.value = changed.value.value
+                record.version = changed.version
+                record.updated_at = changed.updated_at
+                await session.flush()
+                return _to_domain(record)
+        except IntegrityError as error:
+            if _constraint_name(error) == "uq_dimension_companies_value":
+                raise CompanyValueConflict from None
+            raise
+        except MutationAuditContextUnavailable:
+            raise CompanyRepositoryUnavailable from None
+        except SQLAlchemyError as error:
+            _raise_if_temporarily_unavailable(error)
+            raise
 
     async def list_active(
         self,

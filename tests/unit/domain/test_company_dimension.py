@@ -63,3 +63,42 @@ def test_dimension_requires_version_one_and_equal_creation_timestamps() -> None:
             updated_at=timestamp,
             deleted_at=None,
         )
+
+
+def test_dimension_value_change_increments_version_once_and_preserves_identity() -> None:
+    created_at = datetime(2033, 5, 18, tzinfo=UTC)
+    changed_at = datetime(2033, 5, 19, tzinfo=UTC)
+    dimension = Dimension(
+        id=UUID("01890f7c-8abc-7def-8abc-0123456789ab"),
+        code=DimensionCode("SAM"),
+        value=CompanyValue("Samsung"),
+        version=1,
+        created_at=created_at,
+        updated_at=created_at,
+        deleted_at=None,
+    )
+
+    changed = dimension.change_value(CompanyValue("Apple"), changed_at=changed_at)
+
+    assert changed.id == dimension.id
+    assert changed.code == dimension.code
+    assert changed.value == CompanyValue("APPLE")
+    assert changed.version == 2
+    assert changed.created_at == created_at
+    assert changed.updated_at == changed_at
+    assert changed.deleted_at is None
+
+
+def test_normalized_value_noop_returns_the_same_dimension() -> None:
+    timestamp = datetime(2033, 5, 18, tzinfo=UTC)
+    dimension = Dimension(
+        id=UUID("01890f7c-8abc-7def-8abc-0123456789ab"),
+        code=DimensionCode("SAM"),
+        value=CompanyValue("Samsung"),
+        version=1,
+        created_at=timestamp,
+        updated_at=timestamp,
+        deleted_at=None,
+    )
+
+    assert dimension.change_value(CompanyValue(" samsung "), changed_at=timestamp) is dimension

@@ -25,6 +25,7 @@ from mdm.application.memory_dimensions import (
     MemoryDimensionCursor,
     MemoryDimensionPage,
     MemoryRepository,
+    UpdateMemoryValue,
 )
 from mdm.domain.audit import MutationAuditMetadata
 from mdm.domain.auth import UserRole
@@ -36,6 +37,7 @@ MEMORY_ID = UUID("01890f7c-8abc-7def-8abc-222222222222")
 JTI = UUID("123e4567-e89b-42d3-a456-426614174000")
 CHANGE_SET_ID = UUID("01890f7c-8abc-7def-8abc-333333333333")
 NOW = datetime(2033, 5, 18, 3, 33, 20, tzinfo=UTC)
+LATER = datetime(2033, 5, 18, 3, 33, 21, tzinfo=UTC)
 
 
 class HealthyReadinessCheck:
@@ -76,6 +78,7 @@ class FakeMemoryRepository(MemoryRepository):
         )
         self.created: tuple[DimensionCode, MemoryValue, MutationAuditMetadata] | None = None
         self.list_after: MemoryDimensionCursor | None = None
+        self.updated: tuple[UUID, int, MemoryValue, MutationAuditMetadata] | None = None
 
     async def create(self, code, value, audit):
         self.created = (code, value, audit)
@@ -87,6 +90,10 @@ class FakeMemoryRepository(MemoryRepository):
     async def list_active(self, *, after, limit):
         self.list_after = after
         return MemoryDimensionPage(items=(self.memory,), has_more=after is None)
+
+    async def update_value(self, dimension_id, expected_version, value, audit):
+        self.updated = (dimension_id, expected_version, value, audit)
+        return self.memory.change_value(value, changed_at=LATER)
 
 
 def build_application(repository: FakeMemoryRepository) -> FastAPI:
@@ -105,6 +112,11 @@ def build_application(repository: FakeMemoryRepository) -> FastAPI:
             ),
             get_memory=GetMemory(repository, policy),
             list_memories=ListMemories(repository, policy),
+            update_memory=UpdateMemoryValue(
+                repository,
+                policy,
+                HumanMutationAuditFactory(change_set_ids=lambda: CHANGE_SET_ID),
+            ),
             principal_dependency=principal_dependency,
             authorization=policy,
         )
@@ -208,6 +220,29 @@ async def test_user_cannot_create_memory_but_can_read_and_page() -> None:
 
 
 @pytest.mark.api
+async def test_admin_updates_memory_value_atomically() -> None:
+    repository = FakeMemoryRepository()
+
+    async with client_for(repository) as client:
+        response = await client.patch(
+            f"/dimensions/memories/{MEMORY_ID}",
+            headers={"Authorization": "Bearer SUPER_ADMIN", "If-Match": '"1"'},
+            json={"value": {"amount": 1, "unit": "TB"}, "reason": "용량 수정"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["etag"] == '"2"'
+    assert response.json()["value"] == {
+        "amount": 1,
+        "unit": "TB",
+        "capacity_mb": 1_000_000,
+    }
+    assert repository.updated is not None
+    assert repository.updated[1] == 1
+    assert repository.updated[2] == MemoryValue(amount=1, unit=MemoryUnit.TB)
+
+
+@pytest.mark.api
 def test_memory_openapi_exposes_nested_read_only_capacity_contract() -> None:
     schema = create_app().openapi()
     collection = schema["paths"]["/dimensions/memories"]
@@ -216,6 +251,7 @@ def test_memory_openapi_exposes_nested_read_only_capacity_contract() -> None:
     assert collection["post"]["operationId"] == "create_memory_dimension"
     assert collection["get"]["operationId"] == "list_memory_dimensions"
     assert detail["get"]["operationId"] == "get_memory_dimension"
+    assert detail["patch"]["operationId"] == "update_memory_dimension_value"
     input_value = schema["components"]["schemas"]["MemoryValueInput"]
     output_value = schema["components"]["schemas"]["MemoryValueResponse"]
     assert set(input_value["properties"]) == {"amount", "unit"}

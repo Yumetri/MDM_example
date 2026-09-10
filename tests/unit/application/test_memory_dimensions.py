@@ -12,6 +12,7 @@ from mdm.application.memory_dimensions import (
     ListMemories,
     MemoryDimensionCursor,
     MemoryDimensionPage,
+    UpdateMemoryValue,
 )
 from mdm.domain.audit import DimensionOperation, MutationAuditMetadata
 from mdm.domain.auth import UserRole
@@ -37,6 +38,7 @@ class RecordingMemoryRepository:
         self.create_call: tuple[DimensionCode, MemoryValue, MutationAuditMetadata] | None = None
         self.get_call: UUID | None = None
         self.list_call: tuple[MemoryDimensionCursor | None, int] | None = None
+        self.update_call: tuple[UUID, int, MemoryValue, MutationAuditMetadata] | None = None
 
     async def create(self, code, value, audit):
         self.create_call = (code, value, audit)
@@ -49,6 +51,10 @@ class RecordingMemoryRepository:
     async def list_active(self, *, after, limit):
         self.list_call = (after, limit)
         return MemoryDimensionPage(items=(self.dimension,), has_more=False)
+
+    async def update_value(self, dimension_id, expected_version, value, audit):
+        self.update_call = (dimension_id, expected_version, value, audit)
+        return self.dimension
 
 
 def _principal(role: UserRole) -> HumanPrincipal:
@@ -108,3 +114,30 @@ async def test_user_cannot_create_memory_dimension() -> None:
         )
 
     assert repository.create_call is None
+
+
+@pytest.mark.unit
+async def test_admin_updates_memory_amount_and_unit_as_one_value() -> None:
+    repository = RecordingMemoryRepository()
+    update = UpdateMemoryValue(
+        repository,
+        AuthorizationPolicy(),
+        HumanMutationAuditFactory(change_set_ids=lambda: CHANGE_SET_ID),
+    )
+
+    await update.execute(
+        _principal(UserRole.ADMIN),
+        DIMENSION_ID,
+        expected_version=3,
+        amount=1,
+        unit=" tb ",
+        reason=" 용량 변경 ",
+    )
+
+    assert repository.update_call is not None
+    dimension_id, version, value, audit = repository.update_call
+    assert dimension_id == DIMENSION_ID
+    assert version == 3
+    assert value == MemoryValue(amount=1, unit=MemoryUnit.TB)
+    assert audit.operations.dimension is DimensionOperation.UPDATE
+    assert audit.reason == "용량 변경"

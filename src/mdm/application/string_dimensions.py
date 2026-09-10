@@ -98,6 +98,14 @@ class StringDimensionRepository[ValueT](Protocol):
         limit: int,
     ) -> StringDimensionPage[ValueT]: ...
 
+    async def update_value(
+        self,
+        dimension_id: UUID,
+        expected_version: int,
+        value: ValueT,
+        audit: MutationAuditMetadata,
+    ) -> Dimension[ValueT]: ...
+
 
 class ModelRepository(StringDimensionRepository[ModelValue], Protocol):
     """Persistence boundary for Model Dimensions."""
@@ -152,6 +160,47 @@ class _CreateStringDimension[ValueT]:
         return await self._repository.create(normalized_code, normalized_value, audit)
 
 
+class _UpdateStringDimensionValue[ValueT]:
+    def __init__(
+        self,
+        repository: StringDimensionRepository[ValueT],
+        authorization: AuthorizationPolicy,
+        audit_factory: HumanMutationAuditFactory,
+        value_type: Callable[[str], ValueT],
+    ) -> None:
+        self._repository = repository
+        self._authorization = authorization
+        self._audit_factory = audit_factory
+        self._value_type = value_type
+
+    async def execute(
+        self,
+        principal: HumanPrincipal,
+        dimension_id: UUID,
+        *,
+        expected_version: int,
+        value: str,
+        reason: str | None,
+    ) -> Dimension[ValueT]:
+        self._authorization.authorize(principal, AuthorizationAction.MUTATE_DATA)
+        if type(expected_version) is not int or expected_version < 1:
+            raise ValueError("expected version must be a positive integer")
+        normalized_value = self._value_type(value)
+        try:
+            audit = self._audit_factory.create(
+                principal,
+                dimension_operation=DimensionOperation.UPDATE,
+                reason=reason,
+            )
+        except AuditInvariantError as error:
+            raise DimensionValidationError(
+                "reason", "유효한 변경 사유를 입력해야 합니다."
+            ) from error
+        return await self._repository.update_value(
+            dimension_id, expected_version, normalized_value, audit
+        )
+
+
 class _GetStringDimension[ValueT]:
     def __init__(
         self,
@@ -198,6 +247,16 @@ class CreateModel(_CreateStringDimension[ModelValue]):
         super().__init__(repository, authorization, audit_factory, ModelValue)
 
 
+class UpdateModelValue(_UpdateStringDimensionValue[ModelValue]):
+    def __init__(
+        self,
+        repository: ModelRepository,
+        authorization: AuthorizationPolicy,
+        audit_factory: HumanMutationAuditFactory,
+    ) -> None:
+        super().__init__(repository, authorization, audit_factory, ModelValue)
+
+
 class GetModel(_GetStringDimension[ModelValue]):
     pass
 
@@ -207,6 +266,16 @@ class ListModels(_ListStringDimensions[ModelValue]):
 
 
 class CreateBrand(_CreateStringDimension[BrandValue]):
+    def __init__(
+        self,
+        repository: BrandRepository,
+        authorization: AuthorizationPolicy,
+        audit_factory: HumanMutationAuditFactory,
+    ) -> None:
+        super().__init__(repository, authorization, audit_factory, BrandValue)
+
+
+class UpdateBrandValue(_UpdateStringDimensionValue[BrandValue]):
     def __init__(
         self,
         repository: BrandRepository,
@@ -234,6 +303,16 @@ class CreateCountry(_CreateStringDimension[CountryValue]):
         super().__init__(repository, authorization, audit_factory, CountryValue)
 
 
+class UpdateCountryValue(_UpdateStringDimensionValue[CountryValue]):
+    def __init__(
+        self,
+        repository: CountryRepository,
+        authorization: AuthorizationPolicy,
+        audit_factory: HumanMutationAuditFactory,
+    ) -> None:
+        super().__init__(repository, authorization, audit_factory, CountryValue)
+
+
 class GetCountry(_GetStringDimension[CountryValue]):
     pass
 
@@ -243,6 +322,16 @@ class ListCountries(_ListStringDimensions[CountryValue]):
 
 
 class CreateCategory(_CreateStringDimension[CategoryValue]):
+    def __init__(
+        self,
+        repository: CategoryRepository,
+        authorization: AuthorizationPolicy,
+        audit_factory: HumanMutationAuditFactory,
+    ) -> None:
+        super().__init__(repository, authorization, audit_factory, CategoryValue)
+
+
+class UpdateCategoryValue(_UpdateStringDimensionValue[CategoryValue]):
     def __init__(
         self,
         repository: CategoryRepository,

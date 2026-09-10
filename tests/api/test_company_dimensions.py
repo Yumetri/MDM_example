@@ -30,7 +30,9 @@ from mdm.application.dimensions import (
     CreateCompany,
     GetCompany,
     ListCompanies,
+    UpdateCompanyValue,
 )
+from mdm.application.preconditions import PreconditionFailed
 from mdm.domain.audit import MutationAuditMetadata
 from mdm.domain.auth import UserRole
 from mdm.domain.dimensions import CompanyValue, Dimension, DimensionCode
@@ -41,6 +43,7 @@ COMPANY_ID = UUID("01890f7c-8abc-7def-8abc-222222222222")
 JTI = UUID("123e4567-e89b-42d3-a456-426614174000")
 CHANGE_SET_ID = UUID("01890f7c-8abc-7def-8abc-333333333333")
 NOW = datetime(2033, 5, 18, 3, 33, 20, tzinfo=UTC)
+LATER = datetime(2033, 5, 18, 3, 33, 21, tzinfo=UTC)
 
 
 class HealthyReadinessCheck:
@@ -81,6 +84,7 @@ class FakeCompanyRepository(CompanyRepository):
         )
         self.created: tuple[DimensionCode, CompanyValue, MutationAuditMetadata] | None = None
         self.list_after: CompanyCursor | None = None
+        self.updated: tuple[UUID, int, CompanyValue, MutationAuditMetadata] | None = None
         self.failure: Exception | None = None
 
     async def create(
@@ -105,6 +109,12 @@ class FakeCompanyRepository(CompanyRepository):
         self.list_after = after
         return CompanyPage(items=(self.company,), has_more=after is None)
 
+    async def update_value(self, company_id, expected_version, value, audit):
+        if self.failure is not None:
+            raise self.failure
+        self.updated = (company_id, expected_version, value, audit)
+        return self.company.change_value(value, changed_at=LATER)
+
 
 def build_application(repository: FakeCompanyRepository) -> FastAPI:
     application = create_app(readiness_check=HealthyReadinessCheck())
@@ -122,6 +132,11 @@ def build_application(repository: FakeCompanyRepository) -> FastAPI:
             ),
             get_company=GetCompany(repository, policy),
             list_companies=ListCompanies(repository, policy),
+            update_company=UpdateCompanyValue(
+                repository,
+                policy,
+                HumanMutationAuditFactory(change_set_ids=lambda: CHANGE_SET_ID),
+            ),
             principal_dependency=principal_dependency,
             authorization=policy,
         )
@@ -210,6 +225,97 @@ async def test_user_direct_creation_is_forbidden_but_reads_are_allowed() -> None
     assert repository.created is None
     assert allowed.status_code == 200
     assert allowed.headers["etag"] == '"1"'
+
+
+@pytest.mark.api
+async def test_admin_updates_company_value_with_if_match_and_new_etag() -> None:
+    repository = FakeCompanyRepository()
+
+    async with client_for(repository) as client:
+        response = await client.patch(
+            f"/dimensions/companies/{COMPANY_ID}",
+            headers={"Authorization": "Bearer ADMIN", "If-Match": '"1"'},
+            json={"value": " Apple  Korea ", "reason": "수정"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["etag"] == '"2"'
+    assert response.json()["value"] == "APPLE_KOREA"
+    assert response.json()["version"] == 2
+    assert repository.updated is not None
+    assert repository.updated[1] == 1
+    assert repository.updated[2] == CompanyValue("APPLE_KOREA")
+
+
+@pytest.mark.api
+@pytest.mark.parametrize(
+    ("headers", "expected_status", "expected_code"),
+    [
+        ({}, 428, "PRECONDITION_REQUIRED"),
+        ({"If-Match": "*"}, 400, "INVALID_IF_MATCH"),
+        ({"If-Match": 'W/"1"'}, 400, "INVALID_IF_MATCH"),
+        ({"If-Match": '"1", "2"'}, 400, "INVALID_IF_MATCH"),
+    ],
+)
+async def test_company_update_enforces_strong_if_match_contract(
+    headers: dict[str, str], expected_status: int, expected_code: str
+) -> None:
+    repository = FakeCompanyRepository()
+
+    async with client_for(repository) as client:
+        response = await client.patch(
+            f"/dimensions/companies/{COMPANY_ID}",
+            headers={"Authorization": "Bearer ADMIN", **headers},
+            json={"value": "Apple"},
+        )
+
+    assert response.status_code == expected_status
+    assert response.json()["code"] == expected_code
+    assert repository.updated is None
+
+
+@pytest.mark.api
+async def test_company_update_rejects_repeated_if_match_header_lines() -> None:
+    repository = FakeCompanyRepository()
+
+    async with client_for(repository) as client:
+        response = await client.patch(
+            f"/dimensions/companies/{COMPANY_ID}",
+            headers=[
+                ("Authorization", "Bearer ADMIN"),
+                ("If-Match", '"1"'),
+                ("If-Match", '"2"'),
+            ],
+            json={"value": "Apple"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "INVALID_IF_MATCH"
+    assert repository.updated is None
+
+
+@pytest.mark.api
+async def test_stale_company_update_and_code_input_are_rejected() -> None:
+    repository = FakeCompanyRepository()
+    repository.failure = PreconditionFailed()
+
+    async with client_for(repository) as client:
+        stale = await client.patch(
+            f"/dimensions/companies/{COMPANY_ID}",
+            headers={"Authorization": "Bearer ADMIN", "If-Match": '"1"'},
+            json={"value": "Apple"},
+        )
+        code_input = await client.patch(
+            f"/dimensions/companies/{COMPANY_ID}",
+            headers={"Authorization": "Bearer ADMIN", "If-Match": '"1"'},
+            json={"value": "Apple", "code": "APP"},
+        )
+
+    assert stale.status_code == 412
+    assert stale.json()["code"] == "PRECONDITION_FAILED"
+    assert code_input.status_code == 422
+    assert code_input.json()["code"] == "VALIDATION_ERROR"
+    assert code_input.json()["violations"][0]["field"] == "body.code"
 
 
 @pytest.mark.api
@@ -336,12 +442,26 @@ def test_company_openapi_is_consumer_oriented_and_documents_security_and_errors(
     create = paths["/dimensions/companies"]["post"]
     listing = paths["/dimensions/companies"]["get"]
     detail = paths["/dimensions/companies/{company_id}"]["get"]
+    update = paths["/dimensions/companies/{company_id}"]["patch"]
     assert create["operationId"] == "create_company_dimension"
     assert listing["operationId"] == "list_company_dimensions"
     assert detail["operationId"] == "get_company_dimension"
+    assert update["operationId"] == "update_company_dimension_value"
+    if_match = next(
+        parameter for parameter in update["parameters"] if parameter["name"] == "If-Match"
+    )
+    assert if_match["required"] is True
+    assert if_match["schema"]["type"] == "string"
+    assert "anyOf" not in if_match["schema"]
+    assert if_match["schema"]["pattern"] == '^"[1-9][0-9]*"$'
+    assert if_match["schema"]["x-version-maximum"] == 2_147_483_647
     assert create["security"] == [{"BearerAuth": []}]
     assert {"401", "403", "409", "422", "503"} <= set(create["responses"])
     assert {"401", "404", "422", "503"} <= set(detail["responses"])
+    assert {"400", "401", "403", "404", "409", "412", "422", "428", "503"} <= set(
+        update["responses"]
+    )
+    assert update["responses"]["200"]["headers"]["ETag"]["schema"]["example"] == '"1"'
     assert "503" in listing["responses"]
     conflict_examples = create["responses"]["409"]["content"]["application/problem+json"][
         "examples"
