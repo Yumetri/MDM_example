@@ -841,3 +841,189 @@ class MemoryLogRecord(_NumericDimensionLogRecordMixin, Base):
         ForeignKey("dimension_memories.id", ondelete="RESTRICT", onupdate="RESTRICT"),
         nullable=False,
     )
+
+
+_MASTER_CODE_REFERENCE_COLUMNS = (
+    "company_id",
+    "brand_id",
+    "model_id",
+    "category_id",
+    "year_id",
+    "memory_id",
+    "network_id",
+    "country_id",
+)
+
+_MASTER_CODE_STATE_KEYS = (*_MASTER_CODE_REFERENCE_COLUMNS, "code", "deleted")
+
+
+def _master_code_state_json_constraint(column: str) -> str:
+    keys = ", ".join(f"'{key}'" for key in _MASTER_CODE_STATE_KEYS)
+    reference_checks = " AND ".join(
+        f"(jsonb_typeof({column}->'{key}') IN ('string', 'null') AND "
+        f"(jsonb_typeof({column}->'{key}') = 'null' OR "
+        f"({column}->>'{key}') ~ "
+        "'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'))"
+        for key in _MASTER_CODE_REFERENCE_COLUMNS
+    )
+    return (
+        f"jsonb_typeof({column}) = 'object' "
+        f"AND {column} ?& ARRAY[{keys}] "
+        f"AND {column} - ARRAY[{keys}] = '{{}}'::jsonb "
+        f"AND {reference_checks} "
+        f"AND jsonb_typeof({column}->'code') = 'string' "
+        f"AND ({column}->>'code') ~ '^[A-Z0-9]{{1,32}}(-[A-Z0-9]{{1,32}}){{7}}$' "
+        f"AND jsonb_typeof({column}->'deleted') = 'boolean'"
+    )
+
+
+class MasterCodeRecord(Base):
+    """Current state and fixed nullable Dimension references of one MasterCode."""
+
+    __tablename__ = "master_codes"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_master_codes_code"),
+        UniqueConstraint(
+            *_MASTER_CODE_REFERENCE_COLUMNS,
+            name="uq_master_codes_references",
+            postgresql_nulls_not_distinct=True,
+        ),
+        CheckConstraint(
+            "code ~ '^[A-Z0-9]{1,32}(-[A-Z0-9]{1,32}){7}$'",
+            name="ck_master_codes_code",
+        ),
+        CheckConstraint("version >= 1", name="ck_master_codes_version"),
+        CheckConstraint(
+            "updated_at >= created_at AND "
+            "(deleted_at IS NULL OR "
+            "(deleted_at >= created_at AND deleted_at <= updated_at))",
+            name="ck_master_codes_timestamp_order",
+        ),
+        Index(
+            "ix_master_codes_active_created_id",
+            "created_at",
+            "id",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        *(Index(f"ix_master_codes_{column}", column) for column in _MASTER_CODE_REFERENCE_COLUMNS),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    company_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("dimension_companies.id", ondelete="RESTRICT", onupdate="RESTRICT"),
+    )
+    brand_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("dimension_brands.id", ondelete="RESTRICT", onupdate="RESTRICT"),
+    )
+    model_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("dimension_models.id", ondelete="RESTRICT", onupdate="RESTRICT"),
+    )
+    category_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("dimension_categories.id", ondelete="RESTRICT", onupdate="RESTRICT"),
+    )
+    year_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("dimension_years.id", ondelete="RESTRICT", onupdate="RESTRICT"),
+    )
+    memory_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("dimension_memories.id", ondelete="RESTRICT", onupdate="RESTRICT"),
+    )
+    network_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("dimension_networks.id", ondelete="RESTRICT", onupdate="RESTRICT"),
+    )
+    country_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("dimension_countries.id", ondelete="RESTRICT", onupdate="RESTRICT"),
+    )
+    code: Mapped[str] = mapped_column(String(263), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("statement_timestamp()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("statement_timestamp()")
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MasterCodeLogRecord(Base):
+    """Append-only audit snapshot for one MasterCode state transition."""
+
+    __tablename__ = "master_code_logs"
+    __table_args__ = (
+        UniqueConstraint(
+            "master_code_id",
+            "master_code_version",
+            name="uq_master_code_logs_master_version",
+        ),
+        CheckConstraint("master_code_version >= 1", name="ck_master_code_logs_version"),
+        CheckConstraint(
+            "operation IN ('CREATE', 'REFERENCE_UPDATE', 'RECOMPOSE', 'DELETE', 'RESTORE')",
+            name="ck_master_code_logs_operation",
+        ),
+        CheckConstraint(
+            "((operation = 'CREATE' AND old_state IS NULL) OR "
+            "(operation <> 'CREATE' AND old_state IS NOT NULL)) IS TRUE",
+            name="ck_master_code_logs_old_state",
+        ),
+        CheckConstraint(
+            f"old_state IS NULL OR ({_master_code_state_json_constraint('old_state')})",
+            name="ck_master_code_logs_old_state_shape",
+        ),
+        CheckConstraint(
+            _master_code_state_json_constraint("new_state"),
+            name="ck_master_code_logs_new_state_shape",
+        ),
+        CheckConstraint(
+            "reason IS NULL OR (char_length(reason) <= 500 "
+            "AND btrim(reason, ' ') = reason AND reason !~ '[[:cntrl:]]')",
+            name="ck_master_code_logs_reason",
+        ),
+        CheckConstraint(
+            "((actor_kind = 'HUMAN' AND actor_role IN ('USER', 'ADMIN', 'SUPER_ADMIN')) "
+            "OR (actor_kind = 'SYSTEM' AND actor_role IS NULL)) IS TRUE",
+            name="ck_master_code_logs_actor",
+        ),
+        CheckConstraint(
+            "char_length(actor_id) BETWEEN 1 AND 255 AND btrim(actor_id, ' ') = actor_id",
+            name="ck_master_code_logs_actor_id",
+        ),
+        Index(
+            "ix_master_code_logs_master_changed_id",
+            "master_code_id",
+            "changed_at",
+            "id",
+        ),
+        Index(
+            "ix_master_code_logs_change_master",
+            "change_set_id",
+            "master_code_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    master_code_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("master_codes.id", ondelete="RESTRICT", onupdate="RESTRICT"),
+        nullable=False,
+    )
+    change_set_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=False)
+    master_code_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation: Mapped[str] = mapped_column(String(16), nullable=False)
+    old_state: Mapped[object | None] = mapped_column(JSONB)
+    new_state: Mapped[object] = mapped_column(JSONB, nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(500))
+    actor_kind: Mapped[str] = mapped_column(String(6), nullable=False)
+    actor_role: Mapped[str | None] = mapped_column(String(11))
+    actor_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

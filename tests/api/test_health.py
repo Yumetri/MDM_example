@@ -31,7 +31,7 @@ async def client_for(readiness_check: ReadinessCheck) -> AsyncGenerator[AsyncCli
 @pytest.mark.api
 async def test_liveness_does_not_depend_on_database() -> None:
     async with client_for(UnhealthyReadinessCheck()) as client:
-        response = await client.get("/health/live")
+        response = await client.get("/api/v1/health/live")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "message": "서비스가 실행 중입니다."}
@@ -40,7 +40,7 @@ async def test_liveness_does_not_depend_on_database() -> None:
 @pytest.mark.api
 async def test_readiness_succeeds_when_database_is_available() -> None:
     async with client_for(HealthyReadinessCheck()) as client:
-        response = await client.get("/health/ready")
+        response = await client.get("/api/v1/health/ready")
 
     assert response.status_code == 200
     assert response.json() == {
@@ -52,7 +52,7 @@ async def test_readiness_succeeds_when_database_is_available() -> None:
 @pytest.mark.api
 async def test_readiness_returns_problem_details_when_database_is_unavailable() -> None:
     async with client_for(UnhealthyReadinessCheck()) as client:
-        response = await client.get("/health/ready")
+        response = await client.get("/api/v1/health/ready")
 
     assert response.status_code == 503
     assert response.headers["content-type"].startswith("application/problem+json")
@@ -62,7 +62,7 @@ async def test_readiness_returns_problem_details_when_database_is_unavailable() 
         "status": 503,
         "detail": "데이터베이스 연결을 확인할 수 없어 현재 요청을 처리할 수 없습니다.",
         "code": "SERVICE_UNAVAILABLE",
-        "instance": "/health/ready",
+        "instance": "/api/v1/health/ready",
     }
 
 

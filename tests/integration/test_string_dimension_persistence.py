@@ -55,7 +55,8 @@ async def string_dimension_engine() -> AsyncGenerator[AsyncEngine]:
     async with engine.begin() as connection:
         await connection.execute(
             text(
-                "TRUNCATE dimension_model_logs, dimension_models, "
+                "TRUNCATE master_code_logs, master_codes, "
+                "dimension_model_logs, dimension_models, "
                 "dimension_brand_logs, dimension_brands, "
                 "dimension_country_logs, dimension_countries, "
                 "dimension_category_logs, dimension_categories"

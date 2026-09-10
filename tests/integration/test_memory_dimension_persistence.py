@@ -31,7 +31,11 @@ ACTOR_ID = UUID("01890f7c-8abc-7def-8abc-abcdefabcdef")
 async def memory_engine() -> AsyncGenerator[AsyncEngine]:
     engine = create_engine(Settings().reveal_database_url())
     async with engine.begin() as connection:
-        await connection.execute(text("TRUNCATE dimension_memory_logs, dimension_memories"))
+        await connection.execute(
+            text(
+                "TRUNCATE master_code_logs, master_codes, dimension_memory_logs, dimension_memories"
+            )
+        )
     yield engine
     await engine.dispose()
 

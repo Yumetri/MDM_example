@@ -160,7 +160,7 @@ async def test_admin_can_create_normalized_company_with_etag() -> None:
 
     async with client_for(repository) as client:
         response = await client.post(
-            "/dimensions/companies?actor_role=SUPER_ADMIN&actor_kind=SYSTEM",
+            "/api/v1/dimensions/companies?actor_role=SUPER_ADMIN&actor_kind=SYSTEM",
             headers={"Authorization": "Bearer ADMIN", "X-Actor-Role": "SUPER_ADMIN"},
             json={
                 "code": "sam",
@@ -191,7 +191,7 @@ async def test_create_validates_reason_length_after_trimming_edge_spaces() -> No
 
     async with client_for(repository) as client:
         response = await client.post(
-            "/dimensions/companies",
+            "/api/v1/dimensions/companies",
             headers={"Authorization": "Bearer ADMIN"},
             json={"code": "SAM", "value": "Samsung", "reason": f" {'A' * 500} "},
         )
@@ -207,7 +207,7 @@ async def test_user_direct_creation_is_forbidden_but_reads_are_allowed() -> None
 
     async with client_for(repository) as client:
         denied = await client.post(
-            "/dimensions/companies?actor_role=SUPER_ADMIN&actor_kind=SYSTEM",
+            "/api/v1/dimensions/companies?actor_role=SUPER_ADMIN&actor_kind=SYSTEM",
             headers={
                 "Authorization": "Bearer USER",
                 "X-Actor-Role": "SUPER_ADMIN",
@@ -216,7 +216,7 @@ async def test_user_direct_creation_is_forbidden_but_reads_are_allowed() -> None
             json={"code": "SAM", "value": "Samsung"},
         )
         allowed = await client.get(
-            f"/dimensions/companies/{COMPANY_ID}",
+            f"/api/v1/dimensions/companies/{COMPANY_ID}",
             headers={"Authorization": "Bearer USER"},
         )
 
@@ -233,7 +233,7 @@ async def test_admin_updates_company_value_with_if_match_and_new_etag() -> None:
 
     async with client_for(repository) as client:
         response = await client.patch(
-            f"/dimensions/companies/{COMPANY_ID}",
+            f"/api/v1/dimensions/companies/{COMPANY_ID}",
             headers={"Authorization": "Bearer ADMIN", "If-Match": '"1"'},
             json={"value": " Apple  Korea ", "reason": "수정"},
         )
@@ -264,7 +264,7 @@ async def test_company_update_enforces_strong_if_match_contract(
 
     async with client_for(repository) as client:
         response = await client.patch(
-            f"/dimensions/companies/{COMPANY_ID}",
+            f"/api/v1/dimensions/companies/{COMPANY_ID}",
             headers={"Authorization": "Bearer ADMIN", **headers},
             json={"value": "Apple"},
         )
@@ -280,7 +280,7 @@ async def test_company_update_rejects_repeated_if_match_header_lines() -> None:
 
     async with client_for(repository) as client:
         response = await client.patch(
-            f"/dimensions/companies/{COMPANY_ID}",
+            f"/api/v1/dimensions/companies/{COMPANY_ID}",
             headers=[
                 ("Authorization", "Bearer ADMIN"),
                 ("If-Match", '"1"'),
@@ -301,12 +301,12 @@ async def test_stale_company_update_and_code_input_are_rejected() -> None:
 
     async with client_for(repository) as client:
         stale = await client.patch(
-            f"/dimensions/companies/{COMPANY_ID}",
+            f"/api/v1/dimensions/companies/{COMPANY_ID}",
             headers={"Authorization": "Bearer ADMIN", "If-Match": '"1"'},
             json={"value": "Apple"},
         )
         code_input = await client.patch(
-            f"/dimensions/companies/{COMPANY_ID}",
+            f"/api/v1/dimensions/companies/{COMPANY_ID}",
             headers={"Authorization": "Bearer ADMIN", "If-Match": '"1"'},
             json={"value": "Apple", "code": "APP"},
         )
@@ -324,7 +324,7 @@ async def test_actor_fields_in_create_body_are_rejected_instead_of_trusted() -> 
 
     async with client_for(repository) as client:
         response = await client.post(
-            "/dimensions/companies",
+            "/api/v1/dimensions/companies",
             headers={"Authorization": "Bearer ADMIN"},
             json={
                 "code": "SAM",
@@ -346,12 +346,12 @@ async def test_list_uses_opaque_descending_cursor_and_no_total_count() -> None:
 
     async with client_for(repository) as client:
         first = await client.get(
-            "/dimensions/companies?limit=1",
+            "/api/v1/dimensions/companies?limit=1",
             headers={"Authorization": "Bearer SUPER_ADMIN"},
         )
         cursor = first.json()["next_cursor"]
         second = await client.get(
-            "/dimensions/companies",
+            "/api/v1/dimensions/companies",
             params={"limit": 1, "cursor": cursor},
             headers={"Authorization": "Bearer USER"},
         )
@@ -369,7 +369,7 @@ async def test_list_uses_opaque_descending_cursor_and_no_total_count() -> None:
 async def test_invalid_pagination_returns_rfc_9457_validation_error(query: str) -> None:
     async with client_for(FakeCompanyRepository()) as client:
         response = await client.get(
-            f"/dimensions/companies?{query}",
+            f"/api/v1/dimensions/companies?{query}",
             headers={"Authorization": "Bearer USER"},
         )
 
@@ -393,7 +393,7 @@ async def test_create_conflicts_use_stable_problem_codes(failure: Exception, cod
 
     async with client_for(repository) as client:
         response = await client.post(
-            "/dimensions/companies",
+            "/api/v1/dimensions/companies",
             headers={"Authorization": "Bearer ADMIN"},
             json={"code": "SAM", "value": "Samsung"},
         )
@@ -407,7 +407,7 @@ async def test_create_conflicts_use_stable_problem_codes(failure: Exception, cod
 async def test_missing_company_uses_stable_not_found_problem() -> None:
     async with client_for(FakeCompanyRepository()) as client:
         response = await client.get(
-            "/dimensions/companies/01890f7c-8abc-7def-8abc-999999999999",
+            "/api/v1/dimensions/companies/01890f7c-8abc-7def-8abc-999999999999",
             headers={"Authorization": "Bearer USER"},
         )
 
@@ -422,7 +422,7 @@ async def test_temporary_company_repository_failure_is_sanitized() -> None:
 
     async with client_for(repository) as client:
         response = await client.post(
-            "/dimensions/companies",
+            "/api/v1/dimensions/companies",
             headers={"Authorization": "Bearer ADMIN"},
             json={"code": "SAM", "value": "Samsung"},
         )
@@ -439,10 +439,10 @@ def test_company_openapi_is_consumer_oriented_and_documents_security_and_errors(
     schema = build_application(FakeCompanyRepository()).openapi()
     paths = schema["paths"]
 
-    create = paths["/dimensions/companies"]["post"]
-    listing = paths["/dimensions/companies"]["get"]
-    detail = paths["/dimensions/companies/{company_id}"]["get"]
-    update = paths["/dimensions/companies/{company_id}"]["patch"]
+    create = paths["/api/v1/dimensions/companies"]["post"]
+    listing = paths["/api/v1/dimensions/companies"]["get"]
+    detail = paths["/api/v1/dimensions/companies/{company_id}"]["get"]
+    update = paths["/api/v1/dimensions/companies/{company_id}"]["patch"]
     assert create["operationId"] == "create_company_dimension"
     assert listing["operationId"] == "list_company_dimensions"
     assert detail["operationId"] == "get_company_dimension"

@@ -250,7 +250,7 @@ MasterCode는 물리 삭제하지 않고 `deleted_at`을 사용하는 논리 삭
 Dimension 참조는 해당 Dimension의 논리 삭제를 차단하지 않는다.
 
 복원 권한이 있는 `ADMIN`과 `SUPER_ADMIN`은
-`GET /master-codes/{id}/tombstone`에서 삭제된 MasterCode를 조회한다. 응답은 일반 단건 조회와
+`GET /api/v1/master-codes/{id}/tombstone`에서 삭제된 MasterCode를 조회한다. 응답은 일반 단건 조회와
 같은 필드에 `deleted_at`을 포함하고, 삭제된 Dimension을 포함한 8개 참조의 현재 상태로 계산한
 강한 ETag를 제공한다. 활성 행이면 `409 MASTER_CODE_NOT_DELETED`, 존재하지 않으면 `404
 MASTER_CODE_NOT_FOUND`이다. 이 경로는 복원 대상을 확인하고 현재 `If-Match` 값을 얻기 위한

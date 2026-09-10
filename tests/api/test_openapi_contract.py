@@ -1,5 +1,9 @@
+import base64
+import json
 from collections import Counter
+from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 import pytest
 
@@ -32,6 +36,14 @@ def test_openapi_operations_are_documented_for_people_and_agents() -> None:
 
 
 @pytest.mark.api
+def test_all_service_routes_use_the_global_v1_prefix() -> None:
+    paths = app.openapi()["paths"]
+
+    assert paths
+    assert all(path.startswith("/api/v1/") for path in paths)
+
+
+@pytest.mark.api
 def test_openapi_success_responses_have_schemas() -> None:
     for operation in public_operations(app.openapi()):
         success_responses = [
@@ -60,7 +72,7 @@ def test_public_schema_fields_have_descriptions() -> None:
 
 @pytest.mark.api
 def test_readiness_documents_problem_details_example() -> None:
-    operation = app.openapi()["paths"]["/health/ready"]["get"]
+    operation = app.openapi()["paths"]["/api/v1/health/ready"]["get"]
     response = operation["responses"]["503"]
 
     assert response["content"]["application/problem+json"]["schema"]
@@ -72,8 +84,8 @@ def test_readiness_documents_problem_details_example() -> None:
 @pytest.mark.api
 def test_health_responses_have_endpoint_specific_descriptions_and_examples() -> None:
     paths = app.openapi()["paths"]
-    live = paths["/health/live"]["get"]["responses"]["200"]
-    ready = paths["/health/ready"]["get"]["responses"]["200"]
+    live = paths["/api/v1/health/live"]["get"]["responses"]["200"]
+    ready = paths["/api/v1/health/ready"]["get"]["responses"]["200"]
 
     assert live["description"] == "서비스 프로세스가 실행 중입니다."
     assert live["content"]["application/json"]["example"]["message"] == ("서비스가 실행 중입니다.")
@@ -130,10 +142,14 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
             "name": "Memory Dimensions",
             "description": "Memory Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
         },
+        {
+            "name": "MasterCodes",
+            "description": "Dimension 참조를 합성한 MasterCode를 생성하고 조회합니다.",
+        },
     ]
 
-    live = paths["/health/live"]["get"]
-    ready = paths["/health/ready"]["get"]
+    live = paths["/api/v1/health/live"]["get"]
+    ready = paths["/api/v1/health/ready"]["get"]
     assert live["summary"] == "서비스 프로세스 실행 여부 확인"
     assert live["description"] == (
         "서비스 프로세스가 실행 중이며 생존 확인 요청에 응답하면 성공을 반환합니다. "
@@ -151,7 +167,7 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
         "status": 503,
         "detail": "데이터베이스 연결을 확인할 수 없어 현재 요청을 처리할 수 없습니다.",
         "code": "SERVICE_UNAVAILABLE",
-        "instance": "/health/ready",
+        "instance": "/api/v1/health/ready",
     }
 
     assert schemas["HealthResponse"]["description"] == "상태 확인 엔드포인트가 반환하는 결과입니다."
@@ -200,8 +216,8 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
 def test_company_routes_are_registered_in_the_production_schema() -> None:
     paths = app.openapi()["paths"]
 
-    assert set(paths["/dimensions/companies"]) >= {"get", "post"}
-    assert set(paths["/dimensions/companies/{company_id}"]) >= {"get", "patch"}
+    assert set(paths["/api/v1/dimensions/companies"]) >= {"get", "post"}
+    assert set(paths["/api/v1/dimensions/companies/{company_id}"]) >= {"get", "patch"}
 
 
 @pytest.mark.api
@@ -209,13 +225,13 @@ def test_string_dimension_routes_are_registered_in_the_production_schema() -> No
     paths = app.openapi()["paths"]
 
     for collection in ("models", "brands", "countries", "categories"):
-        assert set(paths[f"/dimensions/{collection}"]) >= {"get", "post"}
-        assert set(paths[f"/dimensions/{collection}/{{dimension_id}}"]) >= {"get", "patch"}
+        assert set(paths[f"/api/v1/dimensions/{collection}"]) >= {"get", "post"}
+        assert set(paths[f"/api/v1/dimensions/{collection}/{{dimension_id}}"]) >= {"get", "patch"}
 
 
 @pytest.mark.api
 def test_problem_details_uses_only_its_declared_media_type() -> None:
-    response = app.openapi()["paths"]["/health/ready"]["get"]["responses"]["503"]
+    response = app.openapi()["paths"]["/api/v1/health/ready"]["get"]["responses"]["503"]
 
     assert set(response["content"]) == {"application/problem+json"}
 
@@ -237,7 +253,7 @@ def test_company_examples_match_the_active_response_and_cursor_contract() -> Non
     schema = app.openapi()
     company_schema = schema["components"]["schemas"]["CompanyResponse"]
     list_schema = schema["components"]["schemas"]["CompanyListResponse"]
-    parameters = schema["paths"]["/dimensions/companies"]["get"]["parameters"]
+    parameters = schema["paths"]["/api/v1/dimensions/companies"]["get"]["parameters"]
     cursor_parameter = next(item for item in parameters if item["name"] == "cursor")
 
     assert company_schema["properties"]["deleted_at"]["type"] == "null"
@@ -251,3 +267,33 @@ def test_company_examples_match_the_active_response_and_cursor_contract() -> Non
         list_schema["properties"]["next_cursor"]["examples"][0]
         == (cursor_parameter["schema"]["examples"][0])
     )
+
+
+@pytest.mark.api
+def test_dimension_uuid7_timestamps_and_cursors_match_their_examples() -> None:
+    schema = app.openapi()
+    for name, collection in (
+        ("Company", "companies"),
+        ("Model", "models"),
+        ("Brand", "brands"),
+        ("Country", "countries"),
+        ("Category", "categories"),
+        ("Year", "years"),
+        ("Network", "networks"),
+        ("Memory", "memories"),
+    ):
+        example = schema["components"]["schemas"][f"{name}Response"]["example"]
+        uuid_timestamp = datetime.fromtimestamp(
+            (UUID(example["id"]).int >> 80) / 1000,
+            tz=UTC,
+        ).replace(microsecond=0)
+        assert uuid_timestamp == datetime.fromisoformat(
+            example["created_at"].replace("Z", "+00:00")
+        )
+
+        parameters = schema["paths"][f"/api/v1/dimensions/{collection}"]["get"]["parameters"]
+        encoded = next(item for item in parameters if item["name"] == "cursor")["schema"][
+            "examples"
+        ][0]
+        cursor = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+        assert cursor == {"v": 1, "t": example["created_at"], "i": example["id"]}

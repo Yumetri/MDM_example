@@ -17,6 +17,7 @@ from mdm.api.preconditions import (
     dimension_precondition_responses,
     parse_dimension_if_match_values,
 )
+from mdm.api.routes import API_V1_PREFIX
 from mdm.api.schemas import ProblemDetails
 from mdm.application.auth import HumanPrincipal
 from mdm.application.authorization import AuthorizationAction, AuthorizationPolicy
@@ -305,7 +306,10 @@ def build_company_router(
     authorization: AuthorizationPolicy,
 ) -> APIRouter:
     """Build Company routes from explicit application and authentication dependencies."""
-    router = APIRouter(prefix="/dimensions/companies", tags=["Company Dimensions"])
+    router = APIRouter(
+        prefix=f"{API_V1_PREFIX}/dimensions/companies",
+        tags=["Company Dimensions"],
+    )
     mutation_guard = build_authorization_guard(
         principal_dependency, authorization, AuthorizationAction.MUTATE_DATA
     )

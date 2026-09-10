@@ -17,6 +17,7 @@ from mdm.api.preconditions import (
     dimension_precondition_responses,
     parse_dimension_if_match_values,
 )
+from mdm.api.routes import API_V1_PREFIX
 from mdm.api.schemas import ProblemDetails
 from mdm.application.auth import HumanPrincipal
 from mdm.application.authorization import AuthorizationAction, AuthorizationPolicy
@@ -32,7 +33,7 @@ from mdm.domain.dimensions import Dimension, DimensionValidationError, MemoryVal
 
 CURSOR_EXAMPLE = (
     "eyJpIjoiMDFhMDgzYzMtODhlOC03MTIzLTgwMDAtMDAwMDAwMDAwMDMxIiwidCI6"
-    "IjIwMjYtMDktMTBUMDE6MjM6NDVaIiwidiI6MX0"
+    "IjIwMjYtMDktMDlUMDE6MjM6NDVaIiwidiI6MX0"
 )
 MEMORY_VALUE_EXAMPLE = {"amount": 128, "unit": "GB", "capacity_mb": 128_000}
 MEMORY_EXAMPLE: dict[str, Any] = {
@@ -40,8 +41,8 @@ MEMORY_EXAMPLE: dict[str, Any] = {
     "code": "MEM128",
     "value": MEMORY_VALUE_EXAMPLE,
     "version": 1,
-    "created_at": "2026-09-10T01:23:45Z",
-    "updated_at": "2026-09-10T01:23:45Z",
+    "created_at": "2026-09-09T01:23:45Z",
+    "updated_at": "2026-09-09T01:23:45Z",
     "deleted_at": None,
 }
 
@@ -215,7 +216,10 @@ def build_memory_router(
     principal_dependency: Callable[..., HumanPrincipal],
     authorization: AuthorizationPolicy,
 ) -> APIRouter:
-    router = APIRouter(prefix="/dimensions/memories", tags=["Memory Dimensions"])
+    router = APIRouter(
+        prefix=f"{API_V1_PREFIX}/dimensions/memories",
+        tags=["Memory Dimensions"],
+    )
     mutation_guard = build_authorization_guard(
         principal_dependency, authorization, AuthorizationAction.MUTATE_DATA
     )

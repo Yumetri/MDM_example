@@ -53,7 +53,8 @@ async def test_numeric_dimension_routes_cross_real_auth_repository_and_audit(
     async with engine.begin() as connection:
         await connection.execute(
             text(
-                "TRUNCATE dimension_year_logs, dimension_years, "
+                "TRUNCATE master_code_logs, master_codes, "
+                "dimension_year_logs, dimension_years, "
                 "dimension_network_logs, dimension_networks"
             )
         )
@@ -75,30 +76,30 @@ async def test_numeric_dimension_routes_cross_real_auth_repository_and_audit(
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             for collection, code, value, new_value in CASES:
                 denied = await client.post(
-                    f"/dimensions/{collection}",
+                    f"/api/v1/dimensions/{collection}",
                     headers={"Authorization": f"Bearer {user_token}"},
                     json={"code": code, "value": value},
                 )
                 created = await client.post(
-                    f"/dimensions/{collection}",
+                    f"/api/v1/dimensions/{collection}",
                     headers={"Authorization": f"Bearer {admin_token}"},
                     json={"code": code, "value": value, "reason": "등록"},
                 )
                 listed = await client.get(
-                    f"/dimensions/{collection}",
+                    f"/api/v1/dimensions/{collection}",
                     headers={"Authorization": f"Bearer {user_token}"},
                 )
                 detail = await client.get(
-                    f"/dimensions/{collection}/{created.json()['id']}",
+                    f"/api/v1/dimensions/{collection}/{created.json()['id']}",
                     headers={"Authorization": f"Bearer {user_token}"},
                 )
                 duplicate = await client.post(
-                    f"/dimensions/{collection}",
+                    f"/api/v1/dimensions/{collection}",
                     headers={"Authorization": f"Bearer {admin_token}"},
                     json={"code": code, "value": value - 1},
                 )
                 spoofed = await client.post(
-                    f"/dimensions/{collection}",
+                    f"/api/v1/dimensions/{collection}",
                     headers={"Authorization": f"Bearer {admin_token}"},
                     json={
                         "code": f"{code}X",
@@ -108,11 +109,11 @@ async def test_numeric_dimension_routes_cross_real_auth_repository_and_audit(
                     },
                 )
                 missing = await client.get(
-                    f"/dimensions/{collection}/01890f7c-8abc-7def-8abc-000000000000",
+                    f"/api/v1/dimensions/{collection}/01890f7c-8abc-7def-8abc-000000000000",
                     headers={"Authorization": f"Bearer {user_token}"},
                 )
                 updated = await client.patch(
-                    f"/dimensions/{collection}/{created.json()['id']}",
+                    f"/api/v1/dimensions/{collection}/{created.json()['id']}",
                     headers={
                         "Authorization": f"Bearer {admin_token}",
                         "If-Match": created.headers["etag"],
@@ -148,7 +149,7 @@ async def test_numeric_dimension_routes_cross_real_auth_repository_and_audit(
             ):
                 for index, invalid_value in enumerate(invalid_values):
                     response = await client.post(
-                        f"/dimensions/{collection}",
+                        f"/api/v1/dimensions/{collection}",
                         headers={"Authorization": f"Bearer {admin_token}"},
                         json={"code": f"BAD{index}", "value": invalid_value},
                     )
@@ -165,8 +166,8 @@ def test_numeric_dimension_openapi_has_stable_operations_and_strict_integer_sche
         ("year", "Year", "years", 2000, 2999),
         ("network", "Network", "networks", 1, 5),
     ):
-        collection_path = schema["paths"][f"/dimensions/{collection}"]
-        detail_path = schema["paths"][f"/dimensions/{collection}/{{dimension_id}}"]
+        collection_path = schema["paths"][f"/api/v1/dimensions/{collection}"]
+        detail_path = schema["paths"][f"/api/v1/dimensions/{collection}/{{dimension_id}}"]
         assert collection_path["post"]["operationId"] == f"create_{singular}_dimension"
         assert collection_path["get"]["operationId"] == f"list_{singular}_dimensions"
         assert detail_path["get"]["operationId"] == f"get_{singular}_dimension"
