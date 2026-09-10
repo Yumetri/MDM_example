@@ -17,7 +17,7 @@ def test_year_value_accepts_canonical_boundaries(raw: int) -> None:
 @pytest.mark.parametrize("raw", [1999, 3000, "2026", 2026.0, True, None])
 def test_year_value_rejects_out_of_range_and_non_integer_inputs(raw: object) -> None:
     with pytest.raises(DimensionValidationError) as captured:
-        YearValue(raw)
+        YearValue(raw)  # type: ignore[arg-type]
 
     assert captured.value.field == "value"
 
