@@ -3,6 +3,8 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum, EnumType
+from typing import Any
 from uuid import UUID
 
 _CODE_PATTERN = re.compile(r"^[A-Z0-9]{1,32}$", re.ASCII)
@@ -94,6 +96,45 @@ class CategoryValue:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "value", _normalize_string_value(self.value))
+
+
+@dataclass(frozen=True, slots=True)
+class YearValue:
+    """A strict calendar-year value supported by the Year Dimension."""
+
+    value: int
+
+    def __post_init__(self) -> None:
+        if type(self.value) is not int or not 2000 <= self.value <= 2999:
+            raise DimensionValidationError("value", "2000 이상 2999 이하의 정수여야 합니다.")
+
+
+class _StrictIntegerEnumType(EnumType):
+    def __call__(
+        cls,
+        value: Any,
+        names: Any = None,
+        *values: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if names is not None:
+            return super().__call__(value, names, *values, **kwargs)
+        if type(value) is not int:
+            raise DimensionValidationError("value", "1 이상 5 이하의 정수여야 합니다.")
+        try:
+            return super().__call__(value)  # type: ignore[no-matching-overload]
+        except ValueError:
+            raise DimensionValidationError("value", "1 이상 5 이하의 정수여야 합니다.") from None
+
+
+class NetworkGeneration(Enum, metaclass=_StrictIntegerEnumType):
+    """A non-arithmetic Network generation from the closed 1 through 5 set."""
+
+    GENERATION_1 = 1
+    GENERATION_2 = 2
+    GENERATION_3 = 3
+    GENERATION_4 = 4
+    GENERATION_5 = 5
 
 
 def _normalize_string_value(value: str) -> str:

@@ -18,6 +18,9 @@ from mdm.api.errors import (
     company_repository_unavailable_handler,
     dimension_validation_error_handler,
     invalid_access_token_handler,
+    numeric_dimension_conflict_handler,
+    numeric_dimension_not_found_handler,
+    numeric_dimension_repository_unavailable_handler,
     readiness_unavailable_handler,
     string_dimension_conflict_handler,
     string_dimension_not_found_handler,
@@ -26,6 +29,7 @@ from mdm.api.errors import (
     validation_error_handler,
 )
 from mdm.api.health import build_health_router
+from mdm.api.numeric_dimensions import build_network_router, build_year_router
 from mdm.api.openapi import configure_openapi
 from mdm.api.string_dimensions import (
     build_brand_router,
@@ -47,6 +51,19 @@ from mdm.application.dimensions import (
     ListCompanies,
 )
 from mdm.application.health import CheckReadiness, ReadinessCheck, ReadinessUnavailable
+from mdm.application.numeric_dimensions import (
+    CreateNetwork,
+    CreateYear,
+    GetNetwork,
+    GetYear,
+    ListNetworks,
+    ListYears,
+    NumericDimensionCodeConflict,
+    NumericDimensionMultipleConflicts,
+    NumericDimensionNotFound,
+    NumericDimensionRepositoryUnavailable,
+    NumericDimensionValueConflict,
+)
 from mdm.application.string_dimensions import (
     CreateBrand,
     CreateCategory,
@@ -75,6 +92,10 @@ from mdm.infrastructure.database import (
 from mdm.infrastructure.jwt import RejectingAccessTokenVerifier, build_access_jwt_codec
 from mdm.infrastructure.operational_events import JsonLineOperationalEventSink
 from mdm.infrastructure.repositories.companies import SqlAlchemyCompanyRepository
+from mdm.infrastructure.repositories.numeric_dimensions import (
+    SqlAlchemyNetworkRepository,
+    SqlAlchemyYearRepository,
+)
 from mdm.infrastructure.repositories.string_dimensions import (
     SqlAlchemyBrandRepository,
     SqlAlchemyCategoryRepository,
@@ -90,6 +111,7 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
     engine: AsyncEngine | None = None
     company_router = None
     string_dimension_routers = []
+    numeric_dimension_routers = []
     if readiness_check is None:
         settings = Settings()
         engine = create_engine(settings.reveal_database_url())
@@ -163,6 +185,26 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
                 authorization=authorization,
             )
         )
+        year_repository = SqlAlchemyYearRepository(session_factory)
+        numeric_dimension_routers.append(
+            build_year_router(
+                create_dimension=CreateYear(year_repository, authorization, audit_factory),
+                get_dimension=GetYear(year_repository, authorization),
+                list_dimensions=ListYears(year_repository, authorization),
+                principal_dependency=principal_dependency,
+                authorization=authorization,
+            )
+        )
+        network_repository = SqlAlchemyNetworkRepository(session_factory)
+        numeric_dimension_routers.append(
+            build_network_router(
+                create_dimension=CreateNetwork(network_repository, authorization, audit_factory),
+                get_dimension=GetNetwork(network_repository, authorization),
+                list_dimensions=ListNetworks(network_repository, authorization),
+                principal_dependency=principal_dependency,
+                authorization=authorization,
+            )
+        )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
@@ -202,6 +244,14 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
                 "name": "Category Dimensions",
                 "description": "Category Dimension을 생성하고 활성 데이터를 조회합니다.",
             },
+            {
+                "name": "Year Dimensions",
+                "description": "Year Dimension을 생성하고 활성 데이터를 조회합니다.",
+            },
+            {
+                "name": "Network Dimensions",
+                "description": "Network Dimension을 생성하고 활성 데이터를 조회합니다.",
+            },
         ],
         docs_url=None,
         lifespan=lifespan,
@@ -240,6 +290,17 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         StringDimensionMultipleConflicts,
     ):
         application.add_exception_handler(conflict_type, string_dimension_conflict_handler)
+    application.add_exception_handler(NumericDimensionNotFound, numeric_dimension_not_found_handler)
+    application.add_exception_handler(
+        NumericDimensionRepositoryUnavailable,
+        numeric_dimension_repository_unavailable_handler,
+    )
+    for conflict_type in (
+        NumericDimensionCodeConflict,
+        NumericDimensionValueConflict,
+        NumericDimensionMultipleConflicts,
+    ):
+        application.add_exception_handler(conflict_type, numeric_dimension_conflict_handler)
     application.add_exception_handler(
         ReadinessUnavailable,
         readiness_unavailable_handler,
@@ -253,6 +314,8 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
     if company_router is not None:
         application.include_router(company_router)
     for router in string_dimension_routers:
+        application.include_router(router)
+    for router in numeric_dimension_routers:
         application.include_router(router)
     application.include_router(build_documentation_router(application))
     configure_openapi(application)
