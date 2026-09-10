@@ -126,6 +126,10 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
             "name": "Network Dimensions",
             "description": "Network Dimension을 생성하고 활성 데이터를 조회합니다.",
         },
+        {
+            "name": "Memory Dimensions",
+            "description": "Memory Dimension을 생성하고 활성 데이터를 조회합니다.",
+        },
     ]
 
     live = paths["/health/live"]["get"]

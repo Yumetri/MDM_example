@@ -4,7 +4,9 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
+    Computed,
     DateTime,
     ForeignKey,
     Index,
@@ -687,5 +689,155 @@ class NetworkLogRecord(_NumericDimensionLogRecordMixin, Base):
     dimension_id: Mapped[UUID] = mapped_column(
         PostgreSQLUUID(as_uuid=True),
         ForeignKey("dimension_networks.id", ondelete="RESTRICT", onupdate="RESTRICT"),
+        nullable=False,
+    )
+
+
+def _memory_json_constraint(value: str) -> str:
+    return (
+        f"jsonb_typeof({value}) = 'object' "
+        f"AND {value} ?& ARRAY['amount', 'unit', 'capacity_mb'] "
+        f"AND {value} - ARRAY['amount', 'unit', 'capacity_mb'] = '{{}}'::jsonb "
+        f"AND jsonb_typeof({value}->'amount') = 'number' "
+        f"AND ({value}->>'amount') ~ '^[0-9]+$' "
+        f"AND ({value}->>'amount')::bigint BETWEEN 1 AND 2147483647 "
+        f"AND jsonb_typeof({value}->'unit') = 'string' "
+        f"AND ({value}->>'unit') IN ('MB', 'GB', 'TB', 'PB') "
+        f"AND jsonb_typeof({value}->'capacity_mb') = 'number' "
+        f"AND ({value}->>'capacity_mb') ~ '^[0-9]+$' "
+        f"AND ({value}->>'capacity_mb')::numeric = "
+        f"({value}->>'amount')::bigint * CASE ({value}->>'unit') "
+        "WHEN 'MB' THEN 1 WHEN 'GB' THEN 1000 WHEN 'TB' THEN 1000000 "
+        "WHEN 'PB' THEN 1000000000 END"
+    )
+
+
+def _memory_log_constraints() -> tuple[object, ...]:
+    table = "dimension_memory_logs"
+    old_memory = _memory_json_constraint("old_value")
+    new_memory = _memory_json_constraint("new_value")
+    return (
+        CheckConstraint("dimension_version >= 1", name=f"ck_{table}_version"),
+        CheckConstraint(
+            "operation IN ('CREATE', 'UPDATE', 'DELETE', 'RESTORE')",
+            name=f"ck_{table}_operation",
+        ),
+        CheckConstraint("field_name IN ('CODE', 'VALUE', 'DELETED')", name=f"ck_{table}_field"),
+        CheckConstraint(
+            "((operation = 'CREATE' AND field_name IN ('CODE', 'VALUE') "
+            "AND old_value IS NULL AND new_value IS NOT NULL) OR "
+            "(operation = 'UPDATE' AND field_name IN ('CODE', 'VALUE') "
+            "AND old_value IS NOT NULL AND new_value IS NOT NULL AND old_value <> new_value) OR "
+            "(operation = 'DELETE' AND field_name = 'DELETED' "
+            "AND old_value = 'false'::jsonb AND new_value = 'true'::jsonb) OR "
+            "(operation = 'RESTORE' AND field_name = 'DELETED' "
+            "AND old_value = 'true'::jsonb AND new_value = 'false'::jsonb)) IS TRUE",
+            name=f"ck_{table}_change_shape",
+        ),
+        CheckConstraint(
+            "((field_name = 'CODE' AND "
+            "(old_value IS NULL OR (jsonb_typeof(old_value) = 'string' "
+            "AND (old_value #>> '{}') ~ '^[A-Z0-9]{1,32}$' "
+            "AND (old_value #>> '{}') !~ '^N+$')) AND "
+            "(new_value IS NULL OR (jsonb_typeof(new_value) = 'string' "
+            "AND (new_value #>> '{}') ~ '^[A-Z0-9]{1,32}$' "
+            "AND (new_value #>> '{}') !~ '^N+$'))) OR "
+            f"(field_name = 'VALUE' AND (old_value IS NULL OR ({old_memory})) "
+            f"AND (new_value IS NULL OR ({new_memory}))) OR "
+            "(field_name = 'DELETED' AND "
+            "jsonb_typeof(old_value) = 'boolean' AND jsonb_typeof(new_value) = 'boolean'))",
+            name=f"ck_{table}_value_shape",
+        ),
+        CheckConstraint(
+            "reason IS NULL OR (char_length(reason) <= 500 "
+            "AND btrim(reason, ' ') = reason AND reason !~ '[[:cntrl:]]')",
+            name=f"ck_{table}_reason",
+        ),
+        CheckConstraint(
+            "((actor_kind = 'HUMAN' AND actor_role IN ('USER', 'ADMIN', 'SUPER_ADMIN')) "
+            "OR (actor_kind = 'SYSTEM' AND actor_role IS NULL)) IS TRUE",
+            name=f"ck_{table}_actor",
+        ),
+        CheckConstraint(
+            "char_length(actor_id) BETWEEN 1 AND 255 AND btrim(actor_id, ' ') = actor_id",
+            name=f"ck_{table}_actor_id",
+        ),
+        UniqueConstraint(
+            "dimension_id",
+            "change_set_id",
+            "field_name",
+            name=f"uq_{table}_change_field",
+        ),
+        Index(
+            f"ix_{table}_dimension_changed_id",
+            "dimension_id",
+            "changed_at",
+            "id",
+        ),
+        Index(
+            f"ix_{table}_change_dimension_id",
+            "change_set_id",
+            "dimension_id",
+            "id",
+        ),
+    )
+
+
+class MemoryRecord(Base):
+    __tablename__ = "dimension_memories"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_dimension_memories_code"),
+        UniqueConstraint("capacity_mb", name="uq_dimension_memories_capacity_mb"),
+        CheckConstraint("code ~ '^[A-Z0-9]{1,32}$'", name="ck_dimension_memories_code"),
+        CheckConstraint("code !~ '^N+$'", name="ck_dimension_memories_code_reserved"),
+        CheckConstraint("amount > 0", name="ck_dimension_memories_amount"),
+        CheckConstraint("unit IN ('MB', 'GB', 'TB', 'PB')", name="ck_dimension_memories_unit"),
+        CheckConstraint("version >= 1", name="ck_dimension_memories_version"),
+        CheckConstraint(
+            "updated_at >= created_at AND "
+            "(deleted_at IS NULL OR "
+            "(deleted_at >= created_at AND deleted_at <= updated_at))",
+            name="ck_dimension_memories_timestamp_order",
+        ),
+        Index(
+            "ix_dimension_memories_active_created_id",
+            "created_at",
+            "id",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    code: Mapped[str] = mapped_column(String(32), nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit: Mapped[str] = mapped_column(String(2), nullable=False)
+    capacity_mb: Mapped[int] = mapped_column(
+        BigInteger,
+        Computed(
+            "amount::bigint * CASE unit "
+            "WHEN 'MB' THEN 1 WHEN 'GB' THEN 1000 WHEN 'TB' THEN 1000000 "
+            "WHEN 'PB' THEN 1000000000 END",
+            persisted=True,
+        ),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("statement_timestamp()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("statement_timestamp()")
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MemoryLogRecord(_NumericDimensionLogRecordMixin, Base):
+    __tablename__ = "dimension_memory_logs"
+    __table_args__ = _memory_log_constraints()
+    dimension_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("dimension_memories.id", ondelete="RESTRICT", onupdate="RESTRICT"),
         nullable=False,
     )

@@ -3,7 +3,7 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum, EnumType
+from enum import Enum, EnumType, StrEnum
 from typing import Any
 from uuid import UUID
 
@@ -135,6 +135,56 @@ class NetworkGeneration(Enum, metaclass=_StrictIntegerEnumType):
     GENERATION_3 = 3
     GENERATION_4 = 4
     GENERATION_5 = 5
+
+
+class MemoryUnit(StrEnum):
+    """A decimal SI unit accepted by the Memory Dimension."""
+
+    MB = "MB"
+    GB = "GB"
+    TB = "TB"
+    PB = "PB"
+
+
+_MEMORY_UNIT_MULTIPLIERS = {
+    MemoryUnit.MB: 1,
+    MemoryUnit.GB: 1_000,
+    MemoryUnit.TB: 1_000_000,
+    MemoryUnit.PB: 1_000_000_000,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryValue:
+    """An immutable Memory amount and unit with derived decimal MB capacity."""
+
+    amount: int
+    unit: MemoryUnit
+
+    def __post_init__(self) -> None:
+        if type(self.amount) is not int or not 1 <= self.amount <= 2_147_483_647:
+            raise DimensionValidationError(
+                "value.amount", "1 이상 2147483647 이하의 정수여야 합니다."
+            )
+        if not isinstance(self.unit, MemoryUnit):
+            raise DimensionValidationError("value.unit", "MB, GB, TB, PB 중 하나여야 합니다.")
+
+    @classmethod
+    def create(cls, *, amount: int, unit: str) -> "MemoryValue":
+        if not isinstance(unit, str) or _CONTROL_PATTERN.search(unit):
+            raise DimensionValidationError("value.unit", "MB, GB, TB, PB 중 하나여야 합니다.")
+        normalized_unit = unit.strip(" ").upper()
+        try:
+            memory_unit = MemoryUnit(normalized_unit)
+        except ValueError:
+            raise DimensionValidationError(
+                "value.unit", "MB, GB, TB, PB 중 하나여야 합니다."
+            ) from None
+        return cls(amount=amount, unit=memory_unit)
+
+    @property
+    def capacity_mb(self) -> int:
+        return self.amount * _MEMORY_UNIT_MULTIPLIERS[self.unit]
 
 
 def _normalize_string_value(value: str) -> str:
