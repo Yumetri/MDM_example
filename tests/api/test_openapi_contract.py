@@ -102,6 +102,22 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
             "name": "Company Dimensions",
             "description": "Company Dimension을 생성하고 활성 데이터를 조회합니다.",
         },
+        {
+            "name": "Model Dimensions",
+            "description": "Model Dimension을 생성하고 활성 데이터를 조회합니다.",
+        },
+        {
+            "name": "Brand Dimensions",
+            "description": "Brand Dimension을 생성하고 활성 데이터를 조회합니다.",
+        },
+        {
+            "name": "Country Dimensions",
+            "description": "Country Dimension을 생성하고 활성 데이터를 조회합니다.",
+        },
+        {
+            "name": "Category Dimensions",
+            "description": "Category Dimension을 생성하고 활성 데이터를 조회합니다.",
+        },
     ]
 
     live = paths["/health/live"]["get"]
@@ -174,6 +190,15 @@ def test_company_routes_are_registered_in_the_production_schema() -> None:
 
     assert set(paths["/dimensions/companies"]) >= {"get", "post"}
     assert "get" in paths["/dimensions/companies/{company_id}"]
+
+
+@pytest.mark.api
+def test_string_dimension_routes_are_registered_in_the_production_schema() -> None:
+    paths = app.openapi()["paths"]
+
+    for collection in ("models", "brands", "countries", "categories"):
+        assert set(paths[f"/dimensions/{collection}"]) >= {"get", "post"}
+        assert "get" in paths[f"/dimensions/{collection}/{{dimension_id}}"]
 
 
 @pytest.mark.api

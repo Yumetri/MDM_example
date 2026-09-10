@@ -53,24 +53,68 @@ class CompanyValue:
     value: str
 
     def __post_init__(self) -> None:
-        if not isinstance(self.value, str):
-            raise DimensionValidationError("value", "문자열이어야 합니다.")
-        if _CONTROL_PATTERN.search(self.value):
-            raise DimensionValidationError("value", "제어 문자를 포함할 수 없습니다.")
-        if not self.value.isascii():
-            raise DimensionValidationError(
-                "value",
-                "ASCII 영문 대문자, 숫자와 구분용 밑줄만 사용해 1~128자로 입력해야 합니다.",
-            )
-        normalized = self.value.strip(" ").upper()
-        normalized = re.sub(r" +", "_", normalized)
-        normalized = re.sub(r"_+", "_", normalized).strip("_")
-        if not 1 <= len(normalized) <= 128 or not _STRING_VALUE_PATTERN.fullmatch(normalized):
-            raise DimensionValidationError(
-                "value",
-                "ASCII 영문 대문자, 숫자와 구분용 밑줄만 사용해 1~128자로 입력해야 합니다.",
-            )
-        object.__setattr__(self, "value", normalized)
+        object.__setattr__(self, "value", _normalize_string_value(self.value))
+
+
+@dataclass(frozen=True, slots=True)
+class ModelValue:
+    """The normalized immutable value of a Model Dimension."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "value", _normalize_string_value(self.value))
+
+
+@dataclass(frozen=True, slots=True)
+class BrandValue:
+    """The normalized immutable value of a Brand Dimension."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "value", _normalize_string_value(self.value))
+
+
+@dataclass(frozen=True, slots=True)
+class CountryValue:
+    """The normalized immutable value of a Country Dimension."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "value", _normalize_string_value(self.value))
+
+
+@dataclass(frozen=True, slots=True)
+class CategoryValue:
+    """The normalized immutable value of a Category Dimension."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "value", _normalize_string_value(self.value))
+
+
+def _normalize_string_value(value: str) -> str:
+    if not isinstance(value, str):
+        raise DimensionValidationError("value", "문자열이어야 합니다.")
+    if _CONTROL_PATTERN.search(value):
+        raise DimensionValidationError("value", "제어 문자를 포함할 수 없습니다.")
+    if not value.isascii():
+        raise DimensionValidationError(
+            "value",
+            "ASCII 영문 대문자, 숫자와 구분용 밑줄만 사용해 1~128자로 입력해야 합니다.",
+        )
+    normalized = value.strip(" ").upper()
+    normalized = re.sub(r" +", "_", normalized)
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    if not 1 <= len(normalized) <= 128 or not _STRING_VALUE_PATTERN.fullmatch(normalized):
+        raise DimensionValidationError(
+            "value",
+            "ASCII 영문 대문자, 숫자와 구분용 밑줄만 사용해 1~128자로 입력해야 합니다.",
+        )
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)
