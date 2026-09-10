@@ -142,7 +142,7 @@ async def test_every_invalid_authorization_reason_uses_the_same_public_401_contr
     assert response.headers["www-authenticate"] == "Bearer"
     assert response.headers["content-type"].startswith("application/problem+json")
     assert response.json() == {
-        "type": "https://api.example.com/problems/invalid-access-token",
+        "type": "/problems/invalid-access-token",
         "title": "유효하지 않은 액세스 토큰",
         "status": 401,
         "detail": "유효한 Bearer 액세스 토큰이 필요합니다.",

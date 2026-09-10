@@ -3,7 +3,18 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text, UniqueConstraint, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -156,3 +167,149 @@ class UserSecurityEventRecord(Base):
     new_role: Mapped[str | None] = mapped_column(String(11))
     previous_status: Mapped[str | None] = mapped_column(String(8))
     new_status: Mapped[str | None] = mapped_column(String(8))
+
+
+class CompanyRecord(Base):
+    """Current state of one Company Dimension."""
+
+    __tablename__ = "dimension_companies"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_dimension_companies_code"),
+        UniqueConstraint("value", name="uq_dimension_companies_value"),
+        CheckConstraint("code ~ '^[A-Z0-9]{1,32}$'", name="ck_dimension_companies_code"),
+        CheckConstraint("code !~ '^N+$'", name="ck_dimension_companies_code_reserved"),
+        CheckConstraint(
+            "value ~ '^[A-Z0-9]+(_[A-Z0-9]+)*$' AND char_length(value) <= 128",
+            name="ck_dimension_companies_value",
+        ),
+        CheckConstraint("version >= 1", name="ck_dimension_companies_version"),
+        CheckConstraint(
+            "updated_at >= created_at AND "
+            "(deleted_at IS NULL OR "
+            "(deleted_at >= created_at AND deleted_at <= updated_at))",
+            name="ck_dimension_companies_timestamp_order",
+        ),
+        Index(
+            "ix_dimension_companies_active_created_id",
+            "created_at",
+            "id",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("uuidv7()"),
+    )
+    code: Mapped[str] = mapped_column(String(32), nullable=False)
+    value: Mapped[str] = mapped_column(String(128), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("statement_timestamp()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("statement_timestamp()")
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CompanyLogRecord(Base):
+    """Append-only field audit record for one Company mutation."""
+
+    __tablename__ = "dimension_company_logs"
+    __table_args__ = (
+        CheckConstraint("dimension_version >= 1", name="ck_dimension_company_logs_version"),
+        CheckConstraint(
+            "operation IN ('CREATE', 'UPDATE', 'DELETE', 'RESTORE')",
+            name="ck_dimension_company_logs_operation",
+        ),
+        CheckConstraint(
+            "field_name IN ('CODE', 'VALUE', 'DELETED')",
+            name="ck_dimension_company_logs_field",
+        ),
+        CheckConstraint(
+            "((operation = 'CREATE' AND field_name IN ('CODE', 'VALUE') "
+            "AND old_value IS NULL AND new_value IS NOT NULL) OR "
+            "(operation = 'UPDATE' AND field_name IN ('CODE', 'VALUE') "
+            "AND old_value IS NOT NULL AND new_value IS NOT NULL AND old_value <> new_value) OR "
+            "(operation = 'DELETE' AND field_name = 'DELETED' "
+            "AND old_value = 'false'::jsonb AND new_value = 'true'::jsonb) OR "
+            "(operation = 'RESTORE' AND field_name = 'DELETED' "
+            "AND old_value = 'true'::jsonb AND new_value = 'false'::jsonb)) IS TRUE",
+            name="ck_dimension_company_logs_change_shape",
+        ),
+        CheckConstraint(
+            "((field_name = 'CODE' AND "
+            "(old_value IS NULL OR (jsonb_typeof(old_value) = 'string' "
+            "AND (old_value #>> '{}') ~ '^[A-Z0-9]{1,32}$' "
+            "AND (old_value #>> '{}') !~ '^N+$')) AND "
+            "(new_value IS NULL OR (jsonb_typeof(new_value) = 'string' "
+            "AND (new_value #>> '{}') ~ '^[A-Z0-9]{1,32}$' "
+            "AND (new_value #>> '{}') !~ '^N+$'))) OR "
+            "(field_name = 'VALUE' AND "
+            "(old_value IS NULL OR (jsonb_typeof(old_value) = 'string' "
+            "AND (old_value #>> '{}') ~ '^[A-Z0-9]+(_[A-Z0-9]+)*$' "
+            "AND char_length(old_value #>> '{}') <= 128)) AND "
+            "(new_value IS NULL OR (jsonb_typeof(new_value) = 'string' "
+            "AND (new_value #>> '{}') ~ '^[A-Z0-9]+(_[A-Z0-9]+)*$' "
+            "AND char_length(new_value #>> '{}') <= 128))) OR "
+            "(field_name = 'DELETED' AND "
+            "jsonb_typeof(old_value) = 'boolean' AND jsonb_typeof(new_value) = 'boolean'))",
+            name="ck_dimension_company_logs_value_shape",
+        ),
+        CheckConstraint(
+            "reason IS NULL OR (char_length(reason) <= 500 "
+            "AND btrim(reason, ' ') = reason AND reason !~ '[[:cntrl:]]')",
+            name="ck_dimension_company_logs_reason",
+        ),
+        CheckConstraint(
+            "((actor_kind = 'HUMAN' AND actor_role IN ('USER', 'ADMIN', 'SUPER_ADMIN')) "
+            "OR (actor_kind = 'SYSTEM' AND actor_role IS NULL)) IS TRUE",
+            name="ck_dimension_company_logs_actor",
+        ),
+        CheckConstraint(
+            "char_length(actor_id) BETWEEN 1 AND 255 AND btrim(actor_id, ' ') = actor_id",
+            name="ck_dimension_company_logs_actor_id",
+        ),
+        UniqueConstraint(
+            "dimension_id",
+            "change_set_id",
+            "field_name",
+            name="uq_dimension_company_logs_change_field",
+        ),
+        Index(
+            "ix_dimension_company_logs_dimension_changed_id",
+            "dimension_id",
+            "changed_at",
+            "id",
+        ),
+        Index(
+            "ix_dimension_company_logs_change_dimension_id",
+            "change_set_id",
+            "dimension_id",
+            "id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("uuidv7()"),
+    )
+    dimension_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("dimension_companies.id", ondelete="RESTRICT", onupdate="RESTRICT"),
+        nullable=False,
+    )
+    change_set_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=False)
+    dimension_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation: Mapped[str] = mapped_column(String(7), nullable=False)
+    field_name: Mapped[str] = mapped_column(String(7), nullable=False)
+    old_value: Mapped[object | None] = mapped_column(JSONB)
+    new_value: Mapped[object | None] = mapped_column(JSONB)
+    reason: Mapped[str | None] = mapped_column(String(500))
+    actor_kind: Mapped[str] = mapped_column(String(6), nullable=False)
+    actor_role: Mapped[str | None] = mapped_column(String(11))
+    actor_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

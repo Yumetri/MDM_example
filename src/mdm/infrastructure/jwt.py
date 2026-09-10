@@ -30,6 +30,14 @@ class JwtKeyConfigurationError(RuntimeError):
     """JWT key files are missing, malformed, or mutually inconsistent."""
 
 
+class RejectingAccessTokenVerifier:
+    """Fail closed when this pre-login increment has no configured JWT keyring."""
+
+    def verify(self, token: str, *, now: int) -> AccessTokenClaims:
+        del token, now
+        raise InvalidAccessToken
+
+
 @dataclass(frozen=True, slots=True)
 class JwtKeyPair:
     """An identified RSA signing key and its derived verification key."""

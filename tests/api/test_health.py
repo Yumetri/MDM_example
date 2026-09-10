@@ -57,7 +57,7 @@ async def test_readiness_returns_problem_details_when_database_is_unavailable() 
     assert response.status_code == 503
     assert response.headers["content-type"].startswith("application/problem+json")
     assert response.json() == {
-        "type": "https://api.example.com/problems/service-unavailable",
+        "type": "/problems/service-unavailable",
         "title": "서비스를 사용할 수 없음",
         "status": 503,
         "detail": "데이터베이스 연결을 확인할 수 없어 현재 요청을 처리할 수 없습니다.",
@@ -106,7 +106,7 @@ async def test_validation_errors_are_returned_in_korean(
     assert response.status_code == 422
     assert response.headers["content-type"].startswith("application/problem+json")
     assert response.json() == {
-        "type": "https://api.example.com/problems/validation-error",
+        "type": "/problems/validation-error",
         "title": "유효하지 않은 요청",
         "status": 422,
         "detail": "하나 이상의 요청 필드가 유효하지 않습니다.",
@@ -131,7 +131,7 @@ async def test_unexpected_errors_are_returned_in_korean() -> None:
     assert response.status_code == 500
     assert response.headers["content-type"].startswith("application/problem+json")
     assert response.json() == {
-        "type": "https://api.example.com/problems/internal-error",
+        "type": "/problems/internal-error",
         "title": "서버 내부 오류",
         "status": 500,
         "detail": "서비스에서 예상하지 못한 오류가 발생했습니다.",

@@ -480,7 +480,7 @@ HUMAN 관리자의 작업으로 실행하고 감사한다. SYSTEM 승인 우회�
 | 상황 | HTTP | 안정적인 code |
 | --- | --- | --- |
 | If-Match 문법 오류 | 400 | `INVALID_IF_MATCH` |
-| 인증되지 않은 쓰기 | 401 | `AUTHENTICATION_REQUIRED` |
+| 누락·형식·서명·claim·시간 검증에 실패한 Bearer access token | 401 | `INVALID_ACCESS_TOKEN` |
 | 없는 또는 일반 경로에서 삭제된 Dimension | 404 | `DIMENSION_NOT_FOUND` |
 | code 중복 | 409 | `DIMENSION_CODE_CONFLICT` |
 | value 또는 동등 Memory 용량 중복 | 409 | `DIMENSION_VALUE_CONFLICT` |
