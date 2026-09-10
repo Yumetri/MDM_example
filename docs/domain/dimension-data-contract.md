@@ -227,9 +227,9 @@ repository Protocol, API DTO는 타입별 경계를 유지한다. `DimensionCode
 - 삭제된 행의 일반 단건 조회는 `404 DIMENSION_NOT_FOUND`이다.
 - 일반 API에 `include_deleted` 옵션을 두지 않는다.
 - 응답 본문에 version을 포함하고 단건 응답은 같은 version의 강한 ETag를 제공한다.
-- 타입별 컬렉션 경로를 사용한다. 예: `/dimensions/years`, `/dimensions/memories`.
+- 타입별 컬렉션 경로를 사용한다. 예: `/api/v1/dimensions/years`, `/api/v1/dimensions/memories`.
 - 복원 권한이 있는 인증된 운영자는 타입별
-  `GET /dimensions/{collection}/{id}/tombstone`에서 삭제된 행을 조회할 수 있다.
+  `GET /api/v1/dimensions/{collection}/{id}/tombstone`에서 삭제된 행을 조회할 수 있다.
 - tombstone 응답은 id, code, 타입별 value, version, deleted_at과 현재 version의 강한 ETag를
   제공한다. 활성 행은 `409 DIMENSION_NOT_DELETED`, 존재하지 않는 행은 `404`이다.
 - tombstone은 복원 대상을 확인하고 현재 precondition token을 얻기 위한 단건 경로이다. 일반
@@ -296,7 +296,7 @@ FK는 `ON DELETE RESTRICT`, `ON UPDATE RESTRICT`를 사용한다. UUID PK는 변
 ### 11.1 논리 삭제
 
 - 물리 DELETE를 지원하지 않으며 DB BEFORE DELETE 트리거가 거부한다.
-- 삭제 명령은 타입별 `POST /dimensions/{collection}/{id}/delete`를 사용한다.
+- 삭제 명령은 타입별 `POST /api/v1/dimensions/{collection}/{id}/delete`를 사용한다.
 - `If-Match`와 인증된 actor가 필수이고 reason은 선택이다.
 - Dimension 행을 잠그고 활성 MasterCode 참조 존재 여부를 검사한다.
 - 활성 MasterCode가 하나라도 참조하면 `409 DIMENSION_IN_USE`이다. 논리 삭제된 MasterCode의
@@ -309,7 +309,7 @@ MasterCode 생성·참조 수정·복원도 non-null로 참조할 Dimension을 �
 
 ### 11.2 복원
 
-- 복원 명령은 타입별 `POST /dimensions/{collection}/{id}/restore`를 사용한다.
+- 복원 명령은 타입별 `POST /api/v1/dimensions/{collection}/{id}/restore`를 사용한다.
 - 복원 전에 tombstone 단건 조회로 현재 ETag와 삭제 상태를 확인한다.
 - 복원 요청은 tombstone ETag와 일치하는 단일 강한 `If-Match`를 제공한다.
 - 삭제된 기존 UUID, code와 value를 그대로 사용한다.

@@ -45,7 +45,11 @@ async def test_memory_routes_cross_real_auth_repository_generation_and_audit(
     database_url = Settings().reveal_database_url()
     engine = create_engine(database_url)
     async with engine.begin() as connection:
-        await connection.execute(text("TRUNCATE dimension_memory_logs, dimension_memories"))
+        await connection.execute(
+            text(
+                "TRUNCATE master_code_logs, master_codes, dimension_memory_logs, dimension_memories"
+            )
+        )
     await engine.dispose()
 
     private_path, jwks_path = _write_key_files(tmp_path)
@@ -63,12 +67,12 @@ async def test_memory_routes_cross_real_auth_repository_generation_and_audit(
         transport = ASGITransport(app=application, raise_app_exceptions=False)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             denied = await client.post(
-                "/dimensions/memories",
+                "/api/v1/dimensions/memories",
                 headers={"Authorization": f"Bearer {user_token}"},
                 json={"code": "MEM1TB", "value": {"amount": 1, "unit": "TB"}},
             )
             created = await client.post(
-                "/dimensions/memories",
+                "/api/v1/dimensions/memories",
                 headers={"Authorization": f"Bearer {admin_token}"},
                 json={
                     "code": "mem1tb",
@@ -77,20 +81,20 @@ async def test_memory_routes_cross_real_auth_repository_generation_and_audit(
                 },
             )
             listed = await client.get(
-                "/dimensions/memories",
+                "/api/v1/dimensions/memories",
                 headers={"Authorization": f"Bearer {user_token}"},
             )
             detail = await client.get(
-                f"/dimensions/memories/{created.json()['id']}",
+                f"/api/v1/dimensions/memories/{created.json()['id']}",
                 headers={"Authorization": f"Bearer {user_token}"},
             )
             equivalent = await client.post(
-                "/dimensions/memories",
+                "/api/v1/dimensions/memories",
                 headers={"Authorization": f"Bearer {admin_token}"},
                 json={"code": "MEM1000GB", "value": {"amount": 1000, "unit": "GB"}},
             )
             supplied_capacity = await client.post(
-                "/dimensions/memories",
+                "/api/v1/dimensions/memories",
                 headers={"Authorization": f"Bearer {admin_token}"},
                 json={
                     "code": "FORGED",
@@ -98,12 +102,12 @@ async def test_memory_routes_cross_real_auth_repository_generation_and_audit(
                 },
             )
             invalid_unit = await client.post(
-                "/dimensions/memories",
+                "/api/v1/dimensions/memories",
                 headers={"Authorization": f"Bearer {admin_token}"},
                 json={"code": "INVALID", "value": {"amount": 2, "unit": "GiB"}},
             )
             spoofed = await client.post(
-                "/dimensions/memories",
+                "/api/v1/dimensions/memories",
                 headers={"Authorization": f"Bearer {admin_token}"},
                 json={
                     "code": "SPOOFED",
@@ -113,7 +117,7 @@ async def test_memory_routes_cross_real_auth_repository_generation_and_audit(
                 },
             )
             equivalent_update = await client.patch(
-                f"/dimensions/memories/{created.json()['id']}",
+                f"/api/v1/dimensions/memories/{created.json()['id']}",
                 headers={
                     "Authorization": f"Bearer {admin_token}",
                     "If-Match": created.headers["etag"],
@@ -121,7 +125,7 @@ async def test_memory_routes_cross_real_auth_repository_generation_and_audit(
                 json={"value": {"amount": 1000, "unit": "GB"}},
             )
             updated = await client.patch(
-                f"/dimensions/memories/{created.json()['id']}",
+                f"/api/v1/dimensions/memories/{created.json()['id']}",
                 headers={
                     "Authorization": f"Bearer {admin_token}",
                     "If-Match": equivalent_update.headers["etag"],

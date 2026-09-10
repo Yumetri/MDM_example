@@ -18,6 +18,7 @@ from mdm.api.preconditions import (
     dimension_precondition_responses,
     parse_dimension_if_match_values,
 )
+from mdm.api.routes import API_V1_PREFIX
 from mdm.api.schemas import ProblemDetails
 from mdm.application.auth import HumanPrincipal
 from mdm.application.authorization import AuthorizationAction, AuthorizationPolicy
@@ -37,15 +38,15 @@ from mdm.domain.dimensions import Dimension, DimensionValidationError
 
 CURSOR_EXAMPLE = (
     "eyJpIjoiMDFhMDgzYzMtODhlOC03MTIzLTgwMDAtMDAwMDAwMDAwMDIxIiwidCI6"
-    "IjIwMjYtMDktMTBUMDE6MjM6NDVaIiwidiI6MX0"
+    "IjIwMjYtMDktMDlUMDE6MjM6NDVaIiwidiI6MX0"
 )
 YEAR_EXAMPLE: dict[str, Any] = {
     "id": "01a083c3-88e8-7123-8000-000000000021",
     "code": "YR2026",
     "value": 2026,
     "version": 1,
-    "created_at": "2026-09-10T01:23:45Z",
-    "updated_at": "2026-09-10T01:23:45Z",
+    "created_at": "2026-09-09T01:23:45Z",
+    "updated_at": "2026-09-09T01:23:45Z",
     "deleted_at": None,
 }
 NETWORK_EXAMPLE: dict[str, Any] = {
@@ -308,7 +309,10 @@ def _build_router(
     principal_dependency: Callable[..., HumanPrincipal],
     authorization: AuthorizationPolicy,
 ) -> APIRouter:
-    router = APIRouter(prefix=f"/dimensions/{config.collection}", tags=[config.tag])
+    router = APIRouter(
+        prefix=f"{API_V1_PREFIX}/dimensions/{config.collection}",
+        tags=[config.tag],
+    )
     mutation_guard = build_authorization_guard(
         principal_dependency, authorization, AuthorizationAction.MUTATE_DATA
     )

@@ -61,7 +61,7 @@ class ProblemDetails(BaseModel):
                 "status": 503,
                 "detail": "필수 의존 서비스를 사용할 수 없습니다.",
                 "code": "SERVICE_UNAVAILABLE",
-                "instance": "/health/ready",
+                "instance": "/api/v1/health/ready",
             }
         }
     )
@@ -107,7 +107,7 @@ class ProblemDetails(BaseModel):
         str | SkipJsonSchema[None],
         Field(
             description="이 문제 발생을 식별하는 URI 참조입니다.",
-            examples=["/health/ready"],
+            examples=["/api/v1/health/ready"],
             json_schema_extra={"format": "uri-reference"},
         ),
     ] = None

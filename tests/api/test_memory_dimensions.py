@@ -138,7 +138,7 @@ async def test_admin_creates_normalized_memory_and_receives_derived_capacity() -
 
     async with client_for(repository) as client:
         response = await client.post(
-            "/dimensions/memories",
+            "/api/v1/dimensions/memories",
             headers={"Authorization": "Bearer ADMIN"},
             json={
                 "code": "mem128",
@@ -164,7 +164,7 @@ async def test_capacity_input_and_actor_spoofing_are_rejected() -> None:
 
     async with client_for(repository) as client:
         capacity = await client.post(
-            "/dimensions/memories",
+            "/api/v1/dimensions/memories",
             headers={"Authorization": "Bearer ADMIN"},
             json={
                 "code": "MEM128",
@@ -172,7 +172,7 @@ async def test_capacity_input_and_actor_spoofing_are_rejected() -> None:
             },
         )
         actor = await client.post(
-            "/dimensions/memories",
+            "/api/v1/dimensions/memories",
             headers={"Authorization": "Bearer ADMIN"},
             json={
                 "code": "MEM128",
@@ -194,18 +194,18 @@ async def test_user_cannot_create_memory_but_can_read_and_page() -> None:
 
     async with client_for(repository) as client:
         denied = await client.post(
-            "/dimensions/memories",
+            "/api/v1/dimensions/memories",
             headers={"Authorization": "Bearer USER"},
             json={"code": "MEM128", "value": {"amount": 128, "unit": "GB"}},
         )
         detail = await client.get(
-            f"/dimensions/memories/{MEMORY_ID}", headers={"Authorization": "Bearer USER"}
+            f"/api/v1/dimensions/memories/{MEMORY_ID}", headers={"Authorization": "Bearer USER"}
         )
         first = await client.get(
-            "/dimensions/memories?limit=1", headers={"Authorization": "Bearer USER"}
+            "/api/v1/dimensions/memories?limit=1", headers={"Authorization": "Bearer USER"}
         )
         second = await client.get(
-            "/dimensions/memories",
+            "/api/v1/dimensions/memories",
             params={"limit": 1, "cursor": first.json()["next_cursor"]},
             headers={"Authorization": "Bearer USER"},
         )
@@ -225,7 +225,7 @@ async def test_admin_updates_memory_value_atomically() -> None:
 
     async with client_for(repository) as client:
         response = await client.patch(
-            f"/dimensions/memories/{MEMORY_ID}",
+            f"/api/v1/dimensions/memories/{MEMORY_ID}",
             headers={"Authorization": "Bearer SUPER_ADMIN", "If-Match": '"1"'},
             json={"value": {"amount": 1, "unit": "TB"}, "reason": "용량 수정"},
         )
@@ -245,8 +245,8 @@ async def test_admin_updates_memory_value_atomically() -> None:
 @pytest.mark.api
 def test_memory_openapi_exposes_nested_read_only_capacity_contract() -> None:
     schema = create_app().openapi()
-    collection = schema["paths"]["/dimensions/memories"]
-    detail = schema["paths"]["/dimensions/memories/{dimension_id}"]
+    collection = schema["paths"]["/api/v1/dimensions/memories"]
+    detail = schema["paths"]["/api/v1/dimensions/memories/{dimension_id}"]
 
     assert collection["post"]["operationId"] == "create_memory_dimension"
     assert collection["get"]["operationId"] == "list_memory_dimensions"

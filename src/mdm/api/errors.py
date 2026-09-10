@@ -18,6 +18,13 @@ from mdm.application.dimensions import (
     CompanyValueConflict,
 )
 from mdm.application.health import ReadinessUnavailable
+from mdm.application.master_codes import (
+    InlineDimensionConflict,
+    InvalidDimensionReference,
+    MasterCodeConflict,
+    MasterCodeNotFound,
+    MasterCodeRepositoryUnavailable,
+)
 from mdm.application.memory_dimensions import (
     MemoryDimensionCodeConflict,
     MemoryDimensionMultipleConflicts,
@@ -461,6 +468,107 @@ async def memory_dimension_conflict_handler(request: Request, exc: Exception) ->
             code=code,
             instance=request.url.path,
             violations=violations,
+        )
+    )
+
+
+async def master_code_not_found_handler(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, MasterCodeNotFound)
+    return problem_response(
+        ProblemDetails(
+            type="/problems/master-code-not-found",
+            title="MasterCode를 찾을 수 없음",
+            status=404,
+            detail="요청한 활성 MasterCode를 찾을 수 없습니다.",
+            code="MASTER_CODE_NOT_FOUND",
+            instance=request.url.path,
+        )
+    )
+
+
+async def invalid_dimension_reference_handler(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, InvalidDimensionReference)
+    return problem_response(
+        ProblemDetails(
+            type="/problems/invalid-dimension-reference",
+            title="유효하지 않은 Dimension 참조",
+            status=422,
+            detail="하나 이상의 Dimension 참조가 없거나 활성 상태가 아닙니다.",
+            code="INVALID_DIMENSION_REFERENCE",
+            instance=request.url.path,
+            violations=[
+                FieldViolation(field=f"body.{field}", message="활성 Dimension을 참조해야 합니다.")
+                for field in exc.fields
+            ],
+        )
+    )
+
+
+async def master_code_conflict_handler(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, MasterCodeConflict)
+    return problem_response(
+        ProblemDetails(
+            type="/problems/master-code-conflict",
+            title="MasterCode 충돌",
+            status=409,
+            detail="같은 참조 조합 또는 합성 코드의 MasterCode가 이미 존재합니다.",
+            code="MASTER_CODE_CONFLICT",
+            instance=request.url.path,
+        )
+    )
+
+
+async def inline_dimension_conflict_handler(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, InlineDimensionConflict)
+    if exc.code and exc.value:
+        slug = "dimension-multiple-conflicts"
+        title = "여러 Dimension 필드 충돌"
+        code = "DIMENSION_MULTIPLE_CONFLICTS"
+        detail = "mode: CREATE로 생성하려는 Dimension의 대표 코드와 값이 모두 이미 사용 중입니다."
+        field_names = ("code", "value")
+    elif exc.code:
+        slug = "dimension-code-conflict"
+        title = "Dimension 대표 코드 충돌"
+        code = "DIMENSION_CODE_CONFLICT"
+        detail = "mode: CREATE로 생성하려는 Dimension의 대표 코드가 이미 사용 중입니다."
+        field_names = ("code",)
+    else:
+        slug = "dimension-value-conflict"
+        title = "Dimension 값 충돌"
+        code = "DIMENSION_VALUE_CONFLICT"
+        detail = "mode: CREATE로 생성하려는 Dimension의 값이 이미 사용 중입니다."
+        field_names = ("value",)
+    return problem_response(
+        ProblemDetails(
+            type=f"/problems/{slug}",
+            title=title,
+            status=409,
+            detail=detail,
+            code=code,
+            instance=request.url.path,
+            violations=[
+                FieldViolation(
+                    field=f"body.dimensions.{exc.field}.{field_name}",
+                    message="이미 사용 중인 값입니다.",
+                )
+                for field_name in field_names
+            ],
+        )
+    )
+
+
+async def master_code_repository_unavailable_handler(
+    request: Request, exc: Exception
+) -> JSONResponse:
+    assert isinstance(exc, MasterCodeRepositoryUnavailable)
+    return problem_response(
+        ProblemDetails(
+            type="/problems/service-unavailable",
+            title="서비스를 사용할 수 없음",
+            status=503,
+            detail="요청을 일시적으로 처리할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+            code="SERVICE_UNAVAILABLE",
+            instance=request.url.path,
         )
     )
 

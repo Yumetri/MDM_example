@@ -4,6 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
 
+from mdm.api.routes import API_V1_PREFIX
 from mdm.api.schemas import HealthResponse, ProblemDetails
 from mdm.application.health import ReadinessCheck
 
@@ -13,13 +14,13 @@ READINESS_UNAVAILABLE_EXAMPLE = {
     "status": 503,
     "detail": "데이터베이스 연결을 확인할 수 없어 현재 요청을 처리할 수 없습니다.",
     "code": "SERVICE_UNAVAILABLE",
-    "instance": "/health/ready",
+    "instance": "/api/v1/health/ready",
 }
 
 
 def build_health_router(readiness_check: ReadinessCheck) -> APIRouter:
     """Create health routes wired to the supplied application boundary."""
-    router = APIRouter(prefix="/health", tags=["Health"])
+    router = APIRouter(prefix=f"{API_V1_PREFIX}/health", tags=["Health"])
 
     def provide_readiness_check() -> ReadinessCheck:
         return readiness_check
