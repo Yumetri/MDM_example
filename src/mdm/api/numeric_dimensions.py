@@ -131,12 +131,20 @@ class YearResponse(_NumericDimensionResponse):
     """현재 Year Dimension 상태입니다."""
 
     model_config = ConfigDict(json_schema_extra={"example": YEAR_EXAMPLE})
+    value: Annotated[
+        int,
+        Field(ge=2000, le=2999, description="2000~2999 범위로 검증된 Year 값입니다."),
+    ]
 
 
 class NetworkResponse(_NumericDimensionResponse):
     """현재 Network Dimension 상태입니다."""
 
     model_config = ConfigDict(json_schema_extra={"example": NETWORK_EXAMPLE})
+    value: Annotated[
+        int,
+        Field(ge=1, le=5, description="1~5 범위로 검증된 Network 세대 값입니다."),
+    ]
 
 
 class YearListResponse(BaseModel):

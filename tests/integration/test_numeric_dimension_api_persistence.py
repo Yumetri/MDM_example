@@ -165,6 +165,9 @@ def test_numeric_dimension_openapi_has_stable_operations_and_strict_integer_sche
         assert value_schema["maximum"] == maximum
         response_schema = schema["components"]["schemas"][f"{display_name}Response"]
         assert response_schema["example"]["deleted_at"] is None
+        response_value_schema = response_schema["properties"]["value"]
+        assert response_value_schema["minimum"] == minimum
+        assert response_value_schema["maximum"] == maximum
         list_example = schema["components"]["schemas"][f"{display_name}ListResponse"]["example"]
         encoded_cursor = list_example["next_cursor"]
         cursor_payload = json.loads(
