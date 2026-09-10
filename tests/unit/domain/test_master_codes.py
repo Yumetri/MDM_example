@@ -148,3 +148,31 @@ def test_master_code_etag_changes_when_a_nested_dimension_version_changes() -> N
     assert first.code == changed.code
     assert first.version == changed.version == 1
     assert first.etag() != changed.etag()
+
+
+def test_master_code_recomposition_preserves_references_and_tombstone() -> None:
+    company = _dimension(1, "COM", CompanyValue("company"))
+    tombstone = MasterCode(
+        id=UUID("00000000-0000-7000-8000-000000000009"),
+        dimensions=MasterCodeDimensions(company=company),
+        code="COM-NNN-NNN-NNN-NNN-NNN-NNN-NNN",
+        version=2,
+        created_at=NOW,
+        updated_at=NOW,
+        deleted_at=NOW,
+    )
+    changed_at = datetime(2026, 9, 10, 1, 23, 46, tzinfo=UTC)
+    changed_company = company.change(
+        code=DimensionCode("NEW"),
+        value=None,
+        changed_at=changed_at,
+    )
+    dimensions = MasterCodeDimensions(company=changed_company)
+
+    recomposed = tombstone.recompose(dimensions=dimensions, changed_at=changed_at)
+
+    assert recomposed.code == "NEW-NNN-NNN-NNN-NNN-NNN-NNN-NNN"
+    assert recomposed.version == 3
+    assert recomposed.updated_at == changed_at
+    assert recomposed.deleted_at == tombstone.deleted_at
+    assert recomposed.dimensions.company is changed_company

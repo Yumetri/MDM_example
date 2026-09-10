@@ -38,7 +38,9 @@ class RecordingMemoryRepository:
         self.create_call: tuple[DimensionCode, MemoryValue, MutationAuditMetadata] | None = None
         self.get_call: UUID | None = None
         self.list_call: tuple[MemoryDimensionCursor | None, int] | None = None
-        self.update_call: tuple[UUID, int, MemoryValue, MutationAuditMetadata] | None = None
+        self.update_call: (
+            tuple[UUID, int, MemoryValue | None, MutationAuditMetadata, DimensionCode | None] | None
+        ) = None
 
     async def create(self, code, value, audit):
         self.create_call = (code, value, audit)
@@ -52,8 +54,8 @@ class RecordingMemoryRepository:
         self.list_call = (after, limit)
         return MemoryDimensionPage(items=(self.dimension,), has_more=False)
 
-    async def update_value(self, dimension_id, expected_version, value, audit):
-        self.update_call = (dimension_id, expected_version, value, audit)
+    async def update_value(self, dimension_id, expected_version, value, audit, *, code=None):
+        self.update_call = (dimension_id, expected_version, value, audit, code)
         return self.dimension
 
 
@@ -135,9 +137,10 @@ async def test_admin_updates_memory_amount_and_unit_as_one_value() -> None:
     )
 
     assert repository.update_call is not None
-    dimension_id, version, value, audit = repository.update_call
+    dimension_id, version, value, audit, code = repository.update_call
     assert dimension_id == DIMENSION_ID
     assert version == 3
     assert value == MemoryValue(amount=1, unit=MemoryUnit.TB)
+    assert code is None
     assert audit.operations.dimension is DimensionOperation.UPDATE
     assert audit.reason == "용량 변경"

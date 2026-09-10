@@ -1,7 +1,8 @@
 """Async SQLAlchemy MasterCode repository with ordered Dimension resolution."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -65,6 +66,14 @@ class _SlotConfig:
     value_column: str
     value_for_query: Callable[[Any], Any]
     record_values: Callable[[Any], dict[str, object]]
+
+
+@dataclass(frozen=True, slots=True)
+class LockedMasterCode:
+    """One locked persistence row paired with its freshly read aggregate."""
+
+    record: MasterCodeRecord
+    current: MasterCode
 
 
 def _string_dimension(record_type: type[Any], value_type: type[Any]) -> _SlotConfig:
@@ -338,6 +347,58 @@ class SqlAlchemyMasterCodeRepository:
                 code=constraint == code_constraint,
                 value=constraint == expected_value_constraint,
             ) from None
+
+
+async def lock_referencing_master_codes(
+    session: AsyncSession,
+    *,
+    slot: str,
+    dimension_id: UUID,
+) -> tuple[LockedMasterCode, ...]:
+    """Lock affected MasterCodes by UUID, then read their current joined state."""
+    if slot not in _SLOTS:
+        raise ValueError("unsupported MasterCode Dimension slot")
+    reference_column = getattr(MasterCodeRecord, f"{slot}_id")
+    records = (
+        await session.scalars(
+            select(MasterCodeRecord)
+            .where(reference_column == dimension_id)
+            .order_by(MasterCodeRecord.id)
+            .with_for_update()
+        )
+    ).all()
+    if not records:
+        return ()
+    rows = (
+        await session.execute(
+            _joined_statement()
+            .where(MasterCodeRecord.id.in_([record.id for record in records]))
+            .order_by(MasterCodeRecord.id)
+        )
+    ).all()
+    if len(rows) != len(records):
+        raise ValueError("locked MasterCode state could not be read completely")
+    return tuple(LockedMasterCode(record=row[0], current=_joined_to_domain(row)) for row in rows)
+
+
+def recompose_locked_master_codes(
+    locked: tuple[LockedMasterCode, ...],
+    *,
+    slot: str,
+    dimension: Dimension[Any],
+    changed_at: datetime,
+) -> None:
+    """Apply the domain composition method to already locked MasterCodes."""
+    if slot not in _SLOTS:
+        raise ValueError("unsupported MasterCode Dimension slot")
+    for item in locked:
+        dimensions = replace(item.current.dimensions, **{slot: dimension})
+        recomposed = item.current.recompose(dimensions=dimensions, changed_at=changed_at)
+        if recomposed is item.current:
+            continue
+        item.record.code = recomposed.code
+        item.record.version = recomposed.version
+        item.record.updated_at = recomposed.updated_at
 
 
 def _joined_statement() -> Select[Any]:

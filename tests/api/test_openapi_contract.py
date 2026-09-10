@@ -230,6 +230,32 @@ def test_string_dimension_routes_are_registered_in_the_production_schema() -> No
 
 
 @pytest.mark.api
+def test_dimension_patch_schemas_require_code_or_value_without_accepting_null() -> None:
+    schemas = app.openapi()["components"]["schemas"]
+
+    for schema_name in (
+        "CompanyValueUpdateRequest",
+        "ModelValueUpdateRequest",
+        "BrandValueUpdateRequest",
+        "CountryValueUpdateRequest",
+        "CategoryValueUpdateRequest",
+        "YearValueUpdateRequest",
+        "NetworkValueUpdateRequest",
+        "MemoryValueUpdateRequest",
+    ):
+        request_schema = schemas[schema_name]
+
+        assert request_schema["anyOf"] == [
+            {"required": ["code"]},
+            {"required": ["value"]},
+        ]
+        for field_name in ("code", "value"):
+            field_schema = request_schema["properties"][field_name]
+            assert field_schema.get("type") != "null"
+            assert all(option.get("type") != "null" for option in field_schema.get("anyOf", []))
+
+
+@pytest.mark.api
 def test_problem_details_uses_only_its_declared_media_type() -> None:
     response = app.openapi()["paths"]["/api/v1/health/ready"]["get"]["responses"]["503"]
 

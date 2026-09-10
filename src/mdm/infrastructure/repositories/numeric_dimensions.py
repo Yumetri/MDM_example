@@ -15,6 +15,7 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mdm.application.audit import MutationAuditContextUnavailable
+from mdm.application.master_codes import MasterCodeConflict
 from mdm.application.numeric_dimensions import (
     NumericDimensionCodeConflict,
     NumericDimensionCursor,
@@ -34,6 +35,10 @@ from mdm.domain.dimensions import (
 )
 from mdm.infrastructure.audit_context import SqlAlchemyMutationAuditContextWriter
 from mdm.infrastructure.models import NetworkRecord, YearRecord
+from mdm.infrastructure.repositories.master_codes import (
+    lock_referencing_master_codes,
+    recompose_locked_master_codes,
+)
 
 
 class _SqlAlchemyNumericDimensionRepository[ValueT: (YearValue, NetworkGeneration)]:
@@ -43,12 +48,14 @@ class _SqlAlchemyNumericDimensionRepository[ValueT: (YearValue, NetworkGeneratio
         *,
         dimension_name: str,
         table_name: str,
+        slot: str,
         record_type: type[Any],
         value_type: Callable[[int], ValueT],
     ) -> None:
         self._session_factory = session_factory
         self._dimension_name = dimension_name
         self._table_name = table_name
+        self._slot = slot
         self._record_type = record_type
         self._value_type = value_type
 
@@ -115,8 +122,10 @@ class _SqlAlchemyNumericDimensionRepository[ValueT: (YearValue, NetworkGeneratio
         self,
         dimension_id: UUID,
         expected_version: int,
-        value: ValueT,
+        value: ValueT | None,
         audit: MutationAuditMetadata,
+        *,
+        code: DimensionCode | None = None,
     ) -> Dimension[ValueT]:
         try:
             async with self._session_factory.begin() as session:
@@ -133,29 +142,78 @@ class _SqlAlchemyNumericDimensionRepository[ValueT: (YearValue, NetworkGeneratio
                 current = self._to_domain(record)
                 if current.version != expected_version:
                     raise PreconditionFailed
-                if current.value == value:
+                code_changed = code is not None and code != current.code
+                value_changed = value is not None and value != current.value
+                if not code_changed and not value_changed:
                     return current
-                conflict = await session.scalar(
-                    select(self._record_type.id).where(
-                        self._record_type.id != dimension_id,
-                        self._record_type.value == value.value,
+
+                conflict_conditions = []
+                if code_changed:
+                    assert code is not None
+                    conflict_conditions.append(self._record_type.code == code.value)
+                if value_changed:
+                    assert value is not None
+                    conflict_conditions.append(self._record_type.value == value.value)
+                conflicts = (
+                    await session.execute(
+                        select(self._record_type.code, self._record_type.value).where(
+                            self._record_type.id != dimension_id,
+                            or_(*conflict_conditions),
+                        )
                     )
+                ).all()
+                self._raise_conflict(
+                    code_conflict=(
+                        code_changed
+                        and code is not None
+                        and any(row.code == code.value for row in conflicts)
+                    ),
+                    value_conflict=(
+                        value_changed
+                        and value is not None
+                        and any(row.value == value.value for row in conflicts)
+                    ),
                 )
-                if conflict is not None:
-                    raise NumericDimensionValueConflict(self._dimension_name)
+
+                locked_master_codes = (
+                    await lock_referencing_master_codes(
+                        session,
+                        slot=self._slot,
+                        dimension_id=dimension_id,
+                    )
+                    if code_changed
+                    else ()
+                )
+                minimum_timestamp = max(
+                    (current.updated_at, *(item.current.updated_at for item in locked_master_codes))
+                )
 
                 changed_at = await SqlAlchemyMutationAuditContextWriter(session).set_context(
-                    audit, minimum_timestamp=current.updated_at
+                    audit, minimum_timestamp=minimum_timestamp
                 )
-                changed = current.change_value(value, changed_at=changed_at)
-                record.value = changed.value.value
+                changed = current.change(code=code, value=value, changed_at=changed_at)
+                if code_changed:
+                    recompose_locked_master_codes(
+                        locked_master_codes,
+                        slot=self._slot,
+                        dimension=changed,
+                        changed_at=changed_at,
+                    )
+                    record.code = changed.code.value
+                if value_changed:
+                    record.value = changed.value.value
                 record.version = changed.version
                 record.updated_at = changed.updated_at
                 await session.flush()
                 return self._to_domain(record)
         except IntegrityError as error:
-            if _constraint_name(error) == f"uq_{self._table_name}_value":
+            constraint_name = _constraint_name(error)
+            if constraint_name == f"uq_{self._table_name}_code":
+                raise NumericDimensionCodeConflict(self._dimension_name) from None
+            if constraint_name == f"uq_{self._table_name}_value":
                 raise NumericDimensionValueConflict(self._dimension_name) from None
+            if constraint_name in {"uq_master_codes_code", "uq_master_codes_references"}:
+                raise MasterCodeConflict from None
             raise
         except MutationAuditContextUnavailable:
             raise NumericDimensionRepositoryUnavailable from None
@@ -220,6 +278,7 @@ class SqlAlchemyYearRepository(_SqlAlchemyNumericDimensionRepository[YearValue])
             session_factory,
             dimension_name="Year",
             table_name="dimension_years",
+            slot="year",
             record_type=YearRecord,
             value_type=YearValue,
         )
@@ -231,6 +290,7 @@ class SqlAlchemyNetworkRepository(_SqlAlchemyNumericDimensionRepository[NetworkG
             session_factory,
             dimension_name="Network",
             table_name="dimension_networks",
+            slot="network",
             record_type=NetworkRecord,
             value_type=NetworkGeneration,
         )

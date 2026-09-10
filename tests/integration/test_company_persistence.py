@@ -17,6 +17,7 @@ from mdm.application.dimensions import (
     CompanyRepositoryUnavailable,
     CompanyValueConflict,
 )
+from mdm.application.master_codes import ExistingDimension, MasterCodeCreatePlan, NotApplicable
 from mdm.application.preconditions import PreconditionFailed
 from mdm.domain.audit import DimensionOperation, MasterCodeOperation, MutationOperations
 from mdm.domain.auth import UserRole
@@ -24,6 +25,7 @@ from mdm.domain.dimensions import CompanyValue, DimensionCode
 from mdm.infrastructure.audit_context import SqlAlchemyMutationAuditContextWriter
 from mdm.infrastructure.database import create_engine, create_session_factory
 from mdm.infrastructure.repositories.companies import SqlAlchemyCompanyRepository
+from mdm.infrastructure.repositories.master_codes import SqlAlchemyMasterCodeRepository
 from mdm.infrastructure.settings import Settings
 from mdm.infrastructure.uuid7 import Uuid7Generator
 
@@ -44,11 +46,29 @@ async def company_engine() -> AsyncGenerator[AsyncEngine]:
     await engine.dispose()
 
 
-def _audit(operation: DimensionOperation = DimensionOperation.CREATE):
+def _audit(
+    operation: DimensionOperation = DimensionOperation.CREATE,
+    *,
+    master_code_operation: MasterCodeOperation | None = None,
+):
     return HumanMutationAuditFactory(change_set_ids=Uuid7Generator().new).create(
         HumanPrincipal(user_id=ACTOR_ID, role=UserRole.ADMIN),
         dimension_operation=operation,
+        master_code_operation=master_code_operation,
         reason="최초 등록" if operation is DimensionOperation.CREATE else "값 수정",
+    )
+
+
+def _company_reference_plan(company_id: UUID) -> MasterCodeCreatePlan:
+    return MasterCodeCreatePlan(
+        company=ExistingDimension(company_id),
+        brand=NotApplicable(),
+        model=NotApplicable(),
+        category=NotApplicable(),
+        year=NotApplicable(),
+        memory=NotApplicable(),
+        network=NotApplicable(),
+        country=NotApplicable(),
     )
 
 
@@ -323,6 +343,182 @@ async def test_company_value_update_locks_increments_once_and_writes_one_value_l
 
 
 @pytest.mark.integration
+async def test_company_code_update_recomposes_master_codes_with_shared_audit_context(
+    company_engine: AsyncEngine,
+) -> None:
+    sessions = create_session_factory(company_engine)
+    company_repository = SqlAlchemyCompanyRepository(sessions)
+    master_code_repository = SqlAlchemyMasterCodeRepository(sessions)
+    company = await company_repository.create(
+        DimensionCode("SAM"), CompanyValue("Samsung"), _audit()
+    )
+    master_code = await master_code_repository.create(
+        _company_reference_plan(company.id),
+        HumanMutationAuditFactory(change_set_ids=Uuid7Generator().new).create(
+            HumanPrincipal(user_id=ACTOR_ID, role=UserRole.ADMIN),
+            master_code_operation=MasterCodeOperation.CREATE,
+            reason="MasterCode 등록",
+        ),
+    )
+    audit = _audit(
+        DimensionOperation.UPDATE,
+        master_code_operation=MasterCodeOperation.RECOMPOSE,
+    )
+
+    updated = await company_repository.update_value(
+        company.id,
+        1,
+        None,
+        audit,
+        code=DimensionCode("APP"),
+    )
+    recomposed = await master_code_repository.get_active(master_code.id)
+
+    async with company_engine.connect() as connection:
+        dimension_log = (
+            (
+                await connection.execute(
+                    text(
+                        "SELECT change_set_id, field_name, old_value, new_value, changed_at "
+                        "FROM dimension_company_logs "
+                        "WHERE dimension_id = :id AND dimension_version = 2"
+                    ),
+                    {"id": company.id},
+                )
+            )
+            .mappings()
+            .one()
+        )
+        master_log = (
+            (
+                await connection.execute(
+                    text(
+                        "SELECT change_set_id, operation, old_state, new_state, changed_at "
+                        "FROM master_code_logs "
+                        "WHERE master_code_id = :id AND master_code_version = 2"
+                    ),
+                    {"id": master_code.id},
+                )
+            )
+            .mappings()
+            .one()
+        )
+
+    assert updated.code == DimensionCode("APP")
+    assert updated.value == company.value
+    assert updated.version == 2
+    assert recomposed.code == "APP-NNN-NNN-NNN-NNN-NNN-NNN-NNN"
+    assert recomposed.version == 2
+    assert dimension_log["field_name"] == "CODE"
+    assert dimension_log["old_value"] == "SAM"
+    assert dimension_log["new_value"] == "APP"
+    assert master_log["operation"] == "RECOMPOSE"
+    assert master_log["old_state"]["code"] == master_code.code
+    assert master_log["new_state"]["code"] == recomposed.code
+    assert dimension_log["change_set_id"] == master_log["change_set_id"] == audit.change_set_id
+    assert dimension_log["changed_at"] == master_log["changed_at"] == updated.updated_at
+
+
+@pytest.mark.integration
+async def test_company_code_and_value_update_increments_once_and_writes_two_dimension_logs(
+    company_engine: AsyncEngine,
+) -> None:
+    repository = SqlAlchemyCompanyRepository(create_session_factory(company_engine))
+    company = await repository.create(DimensionCode("SAM"), CompanyValue("Samsung"), _audit())
+    audit = _audit(
+        DimensionOperation.UPDATE,
+        master_code_operation=MasterCodeOperation.RECOMPOSE,
+    )
+
+    updated = await repository.update_value(
+        company.id,
+        1,
+        CompanyValue("Apple"),
+        audit,
+        code=DimensionCode("APP"),
+    )
+
+    async with company_engine.connect() as connection:
+        logs = (
+            (
+                await connection.execute(
+                    text(
+                        "SELECT field_name, change_set_id, changed_at FROM dimension_company_logs "
+                        "WHERE dimension_id = :id AND dimension_version = 2 ORDER BY field_name"
+                    ),
+                    {"id": company.id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    assert updated.code == DimensionCode("APP")
+    assert updated.value == CompanyValue("APPLE")
+    assert updated.version == 2
+    assert [row["field_name"] for row in logs] == ["CODE", "VALUE"]
+    assert {row["change_set_id"] for row in logs} == {audit.change_set_id}
+    assert {row["changed_at"] for row in logs} == {updated.updated_at}
+
+
+@pytest.mark.integration
+async def test_company_value_only_and_code_noop_do_not_recompose_master_code(
+    company_engine: AsyncEngine,
+) -> None:
+    sessions = create_session_factory(company_engine)
+    company_repository = SqlAlchemyCompanyRepository(sessions)
+    master_repository = SqlAlchemyMasterCodeRepository(sessions)
+    company = await company_repository.create(
+        DimensionCode("SAM"), CompanyValue("Samsung"), _audit()
+    )
+    master_code = await master_repository.create(
+        _company_reference_plan(company.id),
+        HumanMutationAuditFactory(change_set_ids=Uuid7Generator().new).create(
+            HumanPrincipal(user_id=ACTOR_ID, role=UserRole.ADMIN),
+            master_code_operation=MasterCodeOperation.CREATE,
+        ),
+    )
+
+    value_updated = await company_repository.update_value(
+        company.id,
+        1,
+        CompanyValue("Apple"),
+        _audit(DimensionOperation.UPDATE),
+    )
+    after_value_update = await master_repository.get_active(master_code.id)
+    noop = await company_repository.update_value(
+        company.id,
+        2,
+        None,
+        _audit(
+            DimensionOperation.UPDATE,
+            master_code_operation=MasterCodeOperation.RECOMPOSE,
+        ),
+        code=DimensionCode("sam"),
+    )
+
+    assert value_updated.version == 2
+    assert after_value_update.code == master_code.code
+    assert after_value_update.version == master_code.version
+    assert after_value_update.updated_at == master_code.updated_at
+    assert noop == value_updated
+    after_noop = await master_repository.get_active(master_code.id)
+    assert after_noop.code == master_code.code
+    assert after_noop.version == master_code.version
+    assert after_noop.updated_at == master_code.updated_at
+    async with company_engine.connect() as connection:
+        counts = (
+            await connection.execute(
+                text(
+                    "SELECT (SELECT count(*) FROM dimension_company_logs), "
+                    "(SELECT count(*) FROM master_code_logs)"
+                )
+            )
+        ).one()
+    assert counts == (3, 1)
+
+
+@pytest.mark.integration
 async def test_company_value_noop_and_stale_precondition_do_not_change_state_or_logs(
     company_engine: AsyncEngine,
 ) -> None:
@@ -367,6 +563,28 @@ async def test_company_update_reports_value_conflict_and_database_guards_transit
             1,
             CompanyValue("Apple"),
             _audit(DimensionOperation.UPDATE),
+        )
+    with pytest.raises(CompanyCodeConflict):
+        await repository.update_value(
+            first.id,
+            1,
+            None,
+            _audit(
+                DimensionOperation.UPDATE,
+                master_code_operation=MasterCodeOperation.RECOMPOSE,
+            ),
+            code=DimensionCode("APP"),
+        )
+    with pytest.raises(CompanyMultipleConflicts):
+        await repository.update_value(
+            first.id,
+            1,
+            CompanyValue("Apple"),
+            _audit(
+                DimensionOperation.UPDATE,
+                master_code_operation=MasterCodeOperation.RECOMPOSE,
+            ),
+            code=DimensionCode("APP"),
         )
 
     with pytest.raises(DBAPIError):

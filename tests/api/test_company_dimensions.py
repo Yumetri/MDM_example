@@ -32,6 +32,7 @@ from mdm.application.dimensions import (
     ListCompanies,
     UpdateCompanyValue,
 )
+from mdm.application.master_codes import MasterCodeConflict
 from mdm.application.preconditions import PreconditionFailed
 from mdm.domain.audit import MutationAuditMetadata
 from mdm.domain.auth import UserRole
@@ -84,7 +85,10 @@ class FakeCompanyRepository(CompanyRepository):
         )
         self.created: tuple[DimensionCode, CompanyValue, MutationAuditMetadata] | None = None
         self.list_after: CompanyCursor | None = None
-        self.updated: tuple[UUID, int, CompanyValue, MutationAuditMetadata] | None = None
+        self.updated: (
+            tuple[UUID, int, CompanyValue | None, MutationAuditMetadata, DimensionCode | None]
+            | None
+        ) = None
         self.failure: Exception | None = None
 
     async def create(
@@ -109,11 +113,11 @@ class FakeCompanyRepository(CompanyRepository):
         self.list_after = after
         return CompanyPage(items=(self.company,), has_more=after is None)
 
-    async def update_value(self, company_id, expected_version, value, audit):
+    async def update_value(self, company_id, expected_version, value, audit, *, code=None):
         if self.failure is not None:
             raise self.failure
-        self.updated = (company_id, expected_version, value, audit)
-        return self.company.change_value(value, changed_at=LATER)
+        self.updated = (company_id, expected_version, value, audit, code)
+        return self.company.change(code=code, value=value, changed_at=LATER)
 
 
 def build_application(repository: FakeCompanyRepository) -> FastAPI:
@@ -295,7 +299,7 @@ async def test_company_update_rejects_repeated_if_match_header_lines() -> None:
 
 
 @pytest.mark.api
-async def test_stale_company_update_and_code_input_are_rejected() -> None:
+async def test_stale_company_update_is_rejected() -> None:
     repository = FakeCompanyRepository()
     repository.failure = PreconditionFailed()
 
@@ -305,17 +309,63 @@ async def test_stale_company_update_and_code_input_are_rejected() -> None:
             headers={"Authorization": "Bearer ADMIN", "If-Match": '"1"'},
             json={"value": "Apple"},
         )
-        code_input = await client.patch(
-            f"/api/v1/dimensions/companies/{COMPANY_ID}",
-            headers={"Authorization": "Bearer ADMIN", "If-Match": '"1"'},
-            json={"value": "Apple", "code": "APP"},
-        )
 
     assert stale.status_code == 412
     assert stale.json()["code"] == "PRECONDITION_FAILED"
-    assert code_input.status_code == 422
-    assert code_input.json()["code"] == "VALIDATION_ERROR"
-    assert code_input.json()["violations"][0]["field"] == "body.code"
+
+
+@pytest.mark.api
+async def test_master_code_recomposition_conflict_uses_stable_problem_code() -> None:
+    repository = FakeCompanyRepository()
+    repository.failure = MasterCodeConflict()
+
+    async with client_for(repository) as client:
+        response = await client.patch(
+            f"/api/v1/dimensions/companies/{COMPANY_ID}",
+            headers={"Authorization": "Bearer ADMIN", "If-Match": '"1"'},
+            json={"code": "APP"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "MASTER_CODE_CONFLICT"
+    assert "internal" not in response.text
+
+
+@pytest.mark.api
+async def test_admin_can_update_company_code_without_supplying_value() -> None:
+    repository = FakeCompanyRepository()
+
+    async with client_for(repository) as client:
+        response = await client.patch(
+            f"/api/v1/dimensions/companies/{COMPANY_ID}",
+            headers={"Authorization": "Bearer ADMIN", "If-Match": '"1"'},
+            json={"code": "app", "reason": "코드 수정"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["etag"] == '"2"'
+    assert response.json()["code"] == "APP"
+    assert response.json()["value"] == "SAMSUNG_ELECTRONICS"
+    assert repository.updated is not None
+    assert repository.updated[2] is None
+    assert repository.updated[4] == DimensionCode("APP")
+
+
+@pytest.mark.api
+@pytest.mark.parametrize("payload", [{}, {"reason": "수정"}, {"code": None}, {"value": None}])
+async def test_company_update_requires_non_null_code_or_value(payload: dict[str, object]) -> None:
+    repository = FakeCompanyRepository()
+
+    async with client_for(repository) as client:
+        response = await client.patch(
+            f"/api/v1/dimensions/companies/{COMPANY_ID}",
+            headers={"Authorization": "Bearer ADMIN", "If-Match": '"1"'},
+            json=payload,
+        )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "VALIDATION_ERROR"
+    assert repository.updated is None
 
 
 @pytest.mark.api

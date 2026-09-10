@@ -289,6 +289,12 @@ repository는 행 잠금 뒤 획득한 하나의 mutation timestamp를 transacti
   트랜잭션 경계를 고정한다.
 - concurrent task 사이에서 SQLAlchemy 세션을 공유하지 않는다.
 
+재합성은 영향받는 MasterCode 전체를 한 트랜잭션에서 처리하며 애플리케이션 수준의 건수 제한,
+분할 처리 또는 비동기 우회 경로를 두지 않는다. 따라서 참조 건수에 비례해 트랜잭션 시간과
+MasterCode 행 잠금 유지 시간이 늘어난다. M4는 이 원자성 검증 범위를 우선하며 M6 전에는 단독
+production 배포 대상이 아니다. 운영 부하 한도, 비동기 전환 또는 배치 정책은 실제 규모와
+서비스 수준 목표가 정해진 뒤 별도 요구사항으로 결정한다.
+
 FK는 `ON DELETE RESTRICT`, `ON UPDATE RESTRICT`를 사용한다. UUID PK는 변경하지 않는다.
 
 ## 11. 논리 삭제와 복원

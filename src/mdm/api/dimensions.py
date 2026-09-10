@@ -3,12 +3,13 @@
 import base64
 import json
 from collections.abc import Callable
+from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
 from mdm.api.auth import INVALID_ACCESS_TOKEN_RESPONSE
 from mdm.api.authorization import AUTHORIZATION_DENIED_RESPONSE, build_authorization_guard
@@ -44,6 +45,19 @@ COMPANY_RESPONSE_EXAMPLE: dict[str, Any] = {
     "updated_at": "2026-09-09T01:23:45Z",
     "deleted_at": None,
 }
+
+
+def _code_field() -> Any:
+    return Field(
+        min_length=1,
+        max_length=32,
+        description=(
+            "MasterCode 합성에 사용할 Company 대표 코드입니다. ASCII 소문자는 대문자로 "
+            "바꾸지만 공백과 A-Z·0-9 이외 문자는 거부하며, 정규화 후 N으로만 이루어진 "
+            "1~32자 값은 예약 코드라서 사용할 수 없습니다."
+        ),
+        examples=["sam01"],
+    )
 
 
 class CompanyCreateRequest(BaseModel):
@@ -96,9 +110,13 @@ class CompanyCreateRequest(BaseModel):
 
 
 class CompanyValueUpdateRequest(BaseModel):
-    """Company Dimension value 수정 입력입니다."""
+    """Company Dimension code 또는 value 수정 입력입니다."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"anyOf": [{"required": ["code"]}, {"required": ["value"]}]},
+    )
+    code: Annotated[StrictStr, _code_field()] = None  # type: ignore[assignment]
     value: Annotated[
         StrictStr,
         Field(
@@ -114,7 +132,7 @@ class CompanyValueUpdateRequest(BaseModel):
                 "x-normalized-maxLength": 128,
             },
         ),
-    ]
+    ] = None  # type: ignore[assignment]
     reason: Annotated[
         StrictStr | None,
         Field(
@@ -126,6 +144,12 @@ class CompanyValueUpdateRequest(BaseModel):
             json_schema_extra={"x-normalized-maxLength": 500},
         ),
     ] = None
+
+    @model_validator(mode="after")
+    def require_business_field(self) -> "CompanyValueUpdateRequest":
+        if not self.model_fields_set.intersection({"code", "value"}):
+            raise ValueError("code 또는 value 중 하나 이상을 입력해야 합니다.")
+        return self
 
 
 class CompanyResponse(BaseModel):
@@ -289,7 +313,7 @@ BODY_VALIDATION_RESPONSE = _validation_response(
     description="Company 생성 입력값이 유효하지 않습니다.", field="body.code"
 )
 PAGINATION_VALIDATION_RESPONSE = _validation_response(
-    description="cursor 또는 limit가 유효하지 않습니다.", field="query.cursor"
+    description="cursor 또는 limit이 유효하지 않습니다.", field="query.cursor"
 )
 IDENTIFIER_VALIDATION_RESPONSE = _validation_response(
     description="Company 식별자 형식이 유효하지 않습니다.", field="path.company_id"
@@ -449,11 +473,12 @@ def build_company_router(
         operation_id="update_company_dimension_value",
         response_model=CompanyResponse,
         status_code=status.HTTP_200_OK,
-        summary="Company Dimension 값 수정",
+        summary="Company Dimension 코드·값 수정",
         description=(
             "ADMIN 또는 SUPER_ADMIN이 직전 단건 응답의 강한 ETag를 If-Match로 제공해 "
-            "Company value만 조건부로 수정합니다. code 수정은 이 엔드포인트에서 허용하지 "
-            "않으며, 정규화한 값이 현재 값과 같으면 version·시각·감사 로그를 변경하지 않습니다."
+            "Company code 또는 value를 조건부로 수정합니다. code가 실제로 바뀌면 이를 참조하는 "
+            "활성·삭제 MasterCode를 같은 트랜잭션에서 재합성하며, 모든 입력이 현재 상태와 같으면 "
+            "version·시각·감사 로그를 변경하지 않습니다."
         ),
         responses={
             status.HTTP_200_OK: {
@@ -493,6 +518,7 @@ def build_company_router(
                 company_id,
                 expected_version=expected_version,
                 value=payload.value,
+                code=payload.code,
                 reason=payload.reason,
             )
         except DimensionValidationError as error:
@@ -504,23 +530,22 @@ def build_company_router(
 
 
 def _update_conflict_response() -> dict[str, Any]:
-    return {
-        "model": ProblemDetails,
-        "description": "정규화된 Company value가 이미 사용 중입니다.",
-        "content": {
-            "application/problem+json": {
-                "schema": {"$ref": "#/components/schemas/ProblemDetails"},
-                "example": {
-                    "type": "/problems/dimension-value-conflict",
-                    "title": "Dimension 값 충돌",
-                    "status": 409,
-                    "detail": "정규화된 Company 값이 이미 사용 중입니다.",
-                    "code": "DIMENSION_VALUE_CONFLICT",
-                    "violations": [{"field": "body.value", "message": "이미 사용 중인 값입니다."}],
-                },
-            }
+    response = deepcopy(CONFLICT_RESPONSE)
+    response["description"] = (
+        "정규화된 Company code·value 또는 재합성된 MasterCode가 이미 사용 중입니다."
+    )
+    examples = response["content"]["application/problem+json"]["examples"]
+    examples["masterCodeConflict"] = {
+        "summary": "MasterCode 재합성 충돌",
+        "value": {
+            "type": "/problems/master-code-conflict",
+            "title": "MasterCode 충돌",
+            "status": 409,
+            "detail": "같은 참조 조합 또는 합성 코드의 MasterCode가 이미 존재합니다.",
+            "code": "MASTER_CODE_CONFLICT",
         },
     }
+    return response
 
 
 def _company_response(company: Dimension[CompanyValue]) -> CompanyResponse:

@@ -9,7 +9,12 @@ from uuid import UUID
 from mdm.application.audit import HumanMutationAuditFactory
 from mdm.application.auth import HumanPrincipal
 from mdm.application.authorization import AuthorizationAction, AuthorizationPolicy
-from mdm.domain.audit import AuditInvariantError, DimensionOperation, MutationAuditMetadata
+from mdm.domain.audit import (
+    AuditInvariantError,
+    DimensionOperation,
+    MasterCodeOperation,
+    MutationAuditMetadata,
+)
 from mdm.domain.dimensions import (
     Dimension,
     DimensionCode,
@@ -100,8 +105,10 @@ class NumericDimensionRepository[ValueT](Protocol):
         self,
         dimension_id: UUID,
         expected_version: int,
-        value: ValueT,
+        value: ValueT | None,
         audit: MutationAuditMetadata,
+        *,
+        code: DimensionCode | None = None,
     ) -> Dimension[ValueT]: ...
 
 
@@ -169,17 +176,24 @@ class _UpdateNumericDimensionValue[ValueT]:
         dimension_id: UUID,
         *,
         expected_version: int,
-        value: int,
-        reason: str | None,
+        value: int | None = None,
+        code: str | None = None,
+        reason: str | None = None,
     ) -> Dimension[ValueT]:
         self._authorization.authorize(principal, AuthorizationAction.MUTATE_DATA)
         if type(expected_version) is not int or expected_version < 1:
             raise ValueError("expected version must be a positive integer")
-        normalized_value = self._value_type(value)
+        if code is None and value is None:
+            raise ValueError("code or value is required")
+        normalized_code = None if code is None else DimensionCode(code)
+        normalized_value = None if value is None else self._value_type(value)
         try:
             audit = self._audit_factory.create(
                 principal,
                 dimension_operation=DimensionOperation.UPDATE,
+                master_code_operation=(
+                    MasterCodeOperation.RECOMPOSE if normalized_code is not None else None
+                ),
                 reason=reason,
             )
         except AuditInvariantError as error:
@@ -187,7 +201,11 @@ class _UpdateNumericDimensionValue[ValueT]:
                 "reason", "유효한 변경 사유를 입력해야 합니다."
             ) from error
         return await self._repository.update_value(
-            dimension_id, expected_version, normalized_value, audit
+            dimension_id,
+            expected_version,
+            normalized_value,
+            audit,
+            code=normalized_code,
         )
 
 

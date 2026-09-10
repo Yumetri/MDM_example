@@ -8,7 +8,14 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StrictStr,
+    model_validator,
+)
 
 from mdm.api.auth import INVALID_ACCESS_TOKEN_RESPONSE
 from mdm.api.authorization import AUTHORIZATION_DENIED_RESPONSE, build_authorization_guard
@@ -117,9 +124,13 @@ class MemoryCreateRequest(BaseModel):
 
 
 class MemoryValueUpdateRequest(BaseModel):
-    """Memory Dimension value 수정 입력입니다."""
+    """Memory Dimension code 또는 value 수정 입력입니다."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"anyOf": [{"required": ["code"]}, {"required": ["value"]}]},
+    )
+    code: Annotated[StrictStr, _code_field()] = None  # type: ignore[assignment]
     value: Annotated[
         MemoryValueInput,
         Field(
@@ -128,7 +139,7 @@ class MemoryValueUpdateRequest(BaseModel):
                 "저장된 amount·unit 표현을 유지하고 상태를 변경하지 않습니다."
             )
         ),
-    ]
+    ] = None  # type: ignore[assignment]
     reason: Annotated[
         StrictStr | None,
         Field(
@@ -140,6 +151,12 @@ class MemoryValueUpdateRequest(BaseModel):
             json_schema_extra={"x-normalized-maxLength": 500},
         ),
     ] = None
+
+    @model_validator(mode="after")
+    def require_business_field(self) -> "MemoryValueUpdateRequest":
+        if not self.model_fields_set.intersection({"code", "value"}):
+            raise ValueError("code 또는 value 중 하나 이상을 입력해야 합니다.")
+        return self
 
 
 class MemoryValueResponse(BaseModel):
@@ -318,11 +335,13 @@ def build_memory_router(
         operation_id="update_memory_dimension_value",
         response_model=MemoryResponse,
         status_code=status.HTTP_200_OK,
-        summary="Memory Dimension 값 수정",
+        summary="Memory Dimension 코드·값 수정",
         description=(
-            "ADMIN 또는 SUPER_ADMIN이 강한 If-Match로 Memory amount·unit을 하나의 value로 "
-            "조건부 수정합니다. code와 capacity_mb 입력은 허용하지 않으며, 동등한 capacity_mb이면 "
-            "현재 저장된 표현과 version·시각·감사 로그를 유지합니다."
+            "ADMIN 또는 SUPER_ADMIN이 직전 단건 응답의 강한 ETag를 If-Match로 제공해 Memory "
+            "code 또는 amount·unit value를 조건부 수정합니다. code가 실제로 바뀌면 이를 참조하는 "
+            "활성·삭제 MasterCode를 같은 트랜잭션에서 재합성합니다. 현재와 동등한 capacity_mb를 "
+            "만드는 value와 현재와 동일한 code만 제공하면 저장된 표현과 version·시각·감사 로그를 "
+            "유지합니다."
         ),
         responses=_update_responses(),
     )
@@ -342,8 +361,9 @@ def build_memory_router(
                 principal,
                 dimension_id,
                 expected_version=expected_version,
-                amount=payload.value.amount,
-                unit=payload.value.unit,
+                amount=None if payload.value is None else payload.value.amount,
+                unit=None if payload.value is None else payload.value.unit,
+                code=payload.code,
                 reason=payload.reason,
             )
         except DimensionValidationError as error:
@@ -523,7 +543,7 @@ def _list_responses() -> dict[int | str, dict[str, Any]]:
         200: {"description": "활성 Memory Dimension 목록을 반환합니다."},
         401: INVALID_ACCESS_TOKEN_RESPONSE,
         422: _validation_response(
-            description="cursor 또는 limit가 유효하지 않습니다.", field="query.cursor"
+            description="cursor 또는 limit이 유효하지 않습니다.", field="query.cursor"
         ),
         503: _service_unavailable_response(),
     }
@@ -551,6 +571,20 @@ def _get_responses() -> dict[int | str, dict[str, Any]]:
 
 
 def _update_responses() -> dict[int | str, dict[str, Any]]:
+    conflict_response = _conflict_response()
+    conflict_response["description"] = (
+        "정규화된 Memory code·capacity_mb 또는 재합성된 MasterCode가 이미 사용 중입니다."
+    )
+    conflict_response["content"]["application/problem+json"]["examples"]["masterCodeConflict"] = {
+        "summary": "MasterCode 재합성 충돌",
+        "value": {
+            "type": "/problems/master-code-conflict",
+            "title": "MasterCode 충돌",
+            "status": 409,
+            "detail": "같은 참조 조합 또는 합성 코드의 MasterCode가 이미 존재합니다.",
+            "code": "MASTER_CODE_CONFLICT",
+        },
+    }
     return {
         200: {
             "description": "현재 Memory Dimension 상태를 반환합니다.",
@@ -564,17 +598,7 @@ def _update_responses() -> dict[int | str, dict[str, Any]]:
         401: INVALID_ACCESS_TOKEN_RESPONSE,
         403: AUTHORIZATION_DENIED_RESPONSE,
         404: _get_responses()[404],
-        409: _problem_response(
-            description="동등한 Memory capacity_mb가 이미 사용 중입니다.",
-            example={
-                "type": "/problems/dimension-value-conflict",
-                "title": "Dimension 값 충돌",
-                "status": 409,
-                "detail": "동등한 Memory 용량이 이미 사용 중입니다.",
-                "code": "DIMENSION_VALUE_CONFLICT",
-                "violations": [{"field": "body.value", "message": "이미 사용 중인 값입니다."}],
-            },
-        ),
+        409: conflict_response,
         422: _validation_response(
             description="Memory 수정 입력값이 유효하지 않습니다.", field="body.value"
         ),

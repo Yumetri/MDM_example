@@ -57,7 +57,7 @@ class RecordingRepository:
         self.create_call: tuple[DimensionCode, object, MutationAuditMetadata] | None = None
         self.get_call: UUID | None = None
         self.list_call: tuple[StringDimensionCursor | None, int] | None = None
-        self.update_call: tuple[UUID, int, object, MutationAuditMetadata] | None = None
+        self.update_call: tuple[UUID, int, object, MutationAuditMetadata, object] | None = None
 
     async def create(self, code, value, audit):
         self.create_call = (code, value, audit)
@@ -71,8 +71,8 @@ class RecordingRepository:
         self.list_call = (after, limit)
         return StringDimensionPage(items=(self.dimension,), has_more=False)
 
-    async def update_value(self, dimension_id, expected_version, value, audit):
-        self.update_call = (dimension_id, expected_version, value, audit)
+    async def update_value(self, dimension_id, expected_version, value, audit, *, code=None):
+        self.update_call = (dimension_id, expected_version, value, audit, code)
         return self.dimension
 
 
@@ -184,9 +184,10 @@ async def test_admin_updates_each_string_dimension_with_normalized_value(
     )
 
     assert repository.update_call is not None
-    dimension_id, version, value, audit = repository.update_call
+    dimension_id, version, value, audit, code = repository.update_call
     assert dimension_id == DIMENSION_ID
     assert version == 4
     assert value == value_type("APPLE_PRO")
+    assert code is None
     assert audit.operations.dimension is DimensionOperation.UPDATE
     assert audit.reason == "수정"

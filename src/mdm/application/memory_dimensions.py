@@ -8,7 +8,12 @@ from uuid import UUID
 from mdm.application.audit import HumanMutationAuditFactory
 from mdm.application.auth import HumanPrincipal
 from mdm.application.authorization import AuthorizationAction, AuthorizationPolicy
-from mdm.domain.audit import AuditInvariantError, DimensionOperation, MutationAuditMetadata
+from mdm.domain.audit import (
+    AuditInvariantError,
+    DimensionOperation,
+    MasterCodeOperation,
+    MutationAuditMetadata,
+)
 from mdm.domain.dimensions import Dimension, DimensionCode, DimensionValidationError, MemoryValue
 
 
@@ -77,8 +82,10 @@ class MemoryRepository(Protocol):
         self,
         dimension_id: UUID,
         expected_version: int,
-        value: MemoryValue,
+        value: MemoryValue | None,
         audit: MutationAuditMetadata,
+        *,
+        code: DimensionCode | None = None,
     ) -> Dimension[MemoryValue]: ...
 
 
@@ -135,18 +142,29 @@ class UpdateMemoryValue:
         dimension_id: UUID,
         *,
         expected_version: int,
-        amount: int,
-        unit: str,
-        reason: str | None,
+        amount: int | None = None,
+        unit: str | None = None,
+        code: str | None = None,
+        reason: str | None = None,
     ) -> Dimension[MemoryValue]:
         self._authorization.authorize(principal, AuthorizationAction.MUTATE_DATA)
         if type(expected_version) is not int or expected_version < 1:
             raise ValueError("expected version must be a positive integer")
-        normalized_value = MemoryValue.create(amount=amount, unit=unit)
+        if code is None and amount is None and unit is None:
+            raise ValueError("code or value is required")
+        if (amount is None) != (unit is None):
+            raise ValueError("memory amount and unit must be provided together")
+        normalized_code = None if code is None else DimensionCode(code)
+        normalized_value = (
+            None if amount is None or unit is None else MemoryValue.create(amount=amount, unit=unit)
+        )
         try:
             audit = self._audit_factory.create(
                 principal,
                 dimension_operation=DimensionOperation.UPDATE,
+                master_code_operation=(
+                    MasterCodeOperation.RECOMPOSE if normalized_code is not None else None
+                ),
                 reason=reason,
             )
         except AuditInvariantError as error:
@@ -154,7 +172,11 @@ class UpdateMemoryValue:
                 "reason", "유효한 변경 사유를 입력해야 합니다."
             ) from error
         return await self._repository.update_value(
-            dimension_id, expected_version, normalized_value, audit
+            dimension_id,
+            expected_version,
+            normalized_value,
+            audit,
+            code=normalized_code,
         )
 
 

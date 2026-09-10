@@ -25,11 +25,16 @@ from mdm.application.dimensions import (
     CompanyRepositoryUnavailable,
     CompanyValueConflict,
 )
+from mdm.application.master_codes import MasterCodeConflict
 from mdm.application.preconditions import PreconditionFailed
 from mdm.domain.audit import MutationAuditMetadata
 from mdm.domain.dimensions import CompanyValue, Dimension, DimensionCode
 from mdm.infrastructure.audit_context import SqlAlchemyMutationAuditContextWriter
 from mdm.infrastructure.models import CompanyRecord
+from mdm.infrastructure.repositories.master_codes import (
+    lock_referencing_master_codes,
+    recompose_locked_master_codes,
+)
 
 
 class SqlAlchemyCompanyRepository:
@@ -98,8 +103,10 @@ class SqlAlchemyCompanyRepository:
         self,
         company_id: UUID,
         expected_version: int,
-        value: CompanyValue,
+        value: CompanyValue | None,
         audit: MutationAuditMetadata,
+        *,
+        code: DimensionCode | None = None,
     ) -> Dimension[CompanyValue]:
         try:
             async with self._session_factory.begin() as session:
@@ -116,29 +123,78 @@ class SqlAlchemyCompanyRepository:
                 current = _to_domain(record)
                 if current.version != expected_version:
                     raise PreconditionFailed
-                if current.value == value:
+                code_changed = code is not None and code != current.code
+                value_changed = value is not None and value != current.value
+                if not code_changed and not value_changed:
                     return current
-                conflict = await session.scalar(
-                    select(CompanyRecord.id).where(
-                        CompanyRecord.id != company_id,
-                        CompanyRecord.value == value.value,
+
+                conflict_conditions = []
+                if code_changed:
+                    assert code is not None
+                    conflict_conditions.append(CompanyRecord.code == code.value)
+                if value_changed:
+                    assert value is not None
+                    conflict_conditions.append(CompanyRecord.value == value.value)
+                conflicts = (
+                    await session.execute(
+                        select(CompanyRecord.code, CompanyRecord.value).where(
+                            CompanyRecord.id != company_id,
+                            or_(*conflict_conditions),
+                        )
                     )
+                ).all()
+                _raise_conflict(
+                    code_conflict=(
+                        code_changed
+                        and code is not None
+                        and any(row.code == code.value for row in conflicts)
+                    ),
+                    value_conflict=(
+                        value_changed
+                        and value is not None
+                        and any(row.value == value.value for row in conflicts)
+                    ),
                 )
-                if conflict is not None:
-                    raise CompanyValueConflict
+
+                locked_master_codes = (
+                    await lock_referencing_master_codes(
+                        session,
+                        slot="company",
+                        dimension_id=company_id,
+                    )
+                    if code_changed
+                    else ()
+                )
+                minimum_timestamp = max(
+                    (current.updated_at, *(item.current.updated_at for item in locked_master_codes))
+                )
 
                 changed_at = await SqlAlchemyMutationAuditContextWriter(session).set_context(
-                    audit, minimum_timestamp=current.updated_at
+                    audit, minimum_timestamp=minimum_timestamp
                 )
-                changed = current.change_value(value, changed_at=changed_at)
-                record.value = changed.value.value
+                changed = current.change(code=code, value=value, changed_at=changed_at)
+                if code_changed:
+                    recompose_locked_master_codes(
+                        locked_master_codes,
+                        slot="company",
+                        dimension=changed,
+                        changed_at=changed_at,
+                    )
+                    record.code = changed.code.value
+                if value_changed:
+                    record.value = changed.value.value
                 record.version = changed.version
                 record.updated_at = changed.updated_at
                 await session.flush()
                 return _to_domain(record)
         except IntegrityError as error:
-            if _constraint_name(error) == "uq_dimension_companies_value":
+            constraint_name = _constraint_name(error)
+            if constraint_name == "uq_dimension_companies_code":
+                raise CompanyCodeConflict from None
+            if constraint_name == "uq_dimension_companies_value":
                 raise CompanyValueConflict from None
+            if constraint_name in {"uq_master_codes_code", "uq_master_codes_references"}:
+                raise MasterCodeConflict from None
             raise
         except MutationAuditContextUnavailable:
             raise CompanyRepositoryUnavailable from None
