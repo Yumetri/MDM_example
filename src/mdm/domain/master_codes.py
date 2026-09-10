@@ -24,16 +24,16 @@ class MasterCodeValidationError(ValueError):
     """A MasterCode state or one typed Dimension slot is invalid."""
 
 
-MasterCodeDimension = Dimension[
-    CompanyValue
-    | BrandValue
-    | ModelValue
-    | CategoryValue
-    | YearValue
-    | MemoryValue
-    | NetworkGeneration
-    | CountryValue
-]
+MasterCodeDimension = (
+    Dimension[CompanyValue]
+    | Dimension[BrandValue]
+    | Dimension[ModelValue]
+    | Dimension[CategoryValue]
+    | Dimension[YearValue]
+    | Dimension[MemoryValue]
+    | Dimension[NetworkGeneration]
+    | Dimension[CountryValue]
+)
 
 
 @dataclass(frozen=True, slots=True)

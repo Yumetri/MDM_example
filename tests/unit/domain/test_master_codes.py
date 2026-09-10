@@ -21,7 +21,7 @@ from mdm.domain.master_codes import MasterCode, MasterCodeDimensions, MasterCode
 NOW = datetime(2026, 9, 10, 1, 23, 45, tzinfo=UTC)
 
 
-def _dimension(identifier: int, code: str, value: object) -> Dimension[object]:
+def _dimension[ValueT](identifier: int, code: str, value: ValueT) -> Dimension[ValueT]:
     return Dimension(
         id=UUID(f"00000000-0000-7000-8000-{identifier:012d}"),
         code=DimensionCode(code),

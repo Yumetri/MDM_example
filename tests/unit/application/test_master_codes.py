@@ -12,10 +12,12 @@ from mdm.application.master_codes import (
     InlineDimension,
     MasterCodeCreateInput,
     MasterCodeCreatePlan,
+    MasterCodeCursor,
+    MasterCodePage,
     MemoryCreateValue,
     NotApplicable,
 )
-from mdm.domain.audit import DimensionOperation, MasterCodeOperation
+from mdm.domain.audit import DimensionOperation, MasterCodeOperation, MutationAuditMetadata
 from mdm.domain.auth import UserRole
 from mdm.domain.dimensions import CompanyValue, DimensionCode, MemoryUnit, MemoryValue
 from mdm.domain.master_codes import MasterCode, MasterCodeDimensions
@@ -28,15 +30,26 @@ CHANGE_SET_ID = UUID("00000000-0000-7000-8000-000000000003")
 
 class FakeRepository:
     def __init__(self) -> None:
-        self.received: tuple[MasterCodeCreatePlan, object] | None = None
+        self.received: tuple[MasterCodeCreatePlan, MutationAuditMetadata] | None = None
 
-    async def create(self, plan: MasterCodeCreatePlan, audit: object) -> MasterCode:
+    async def create(self, plan: MasterCodeCreatePlan, audit: MutationAuditMetadata) -> MasterCode:
         self.received = (plan, audit)
         return MasterCode.create(
             id=UUID("00000000-0000-7000-8000-000000000004"),
             dimensions=MasterCodeDimensions(),
             created_at=NOW,
         )
+
+    async def get_active(self, master_code_id: UUID) -> MasterCode:
+        raise AssertionError(f"unexpected get_active call for {master_code_id}")
+
+    async def list_active(
+        self,
+        *,
+        after: MasterCodeCursor | None,
+        limit: int,
+    ) -> MasterCodePage:
+        raise AssertionError(f"unexpected list_active call for {after=}, {limit=}")
 
 
 def _input() -> MasterCodeCreateInput:

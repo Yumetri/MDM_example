@@ -224,16 +224,16 @@ async def test_zero_through_eight_dimension_references_round_trip(
     dimension_by_slot = dict(
         zip(MasterCodeDimensions.ORDER, all_inline.dimensions.ordered(), strict=True)
     )
+    dimension_ids = {
+        slot: dimension.id for slot, dimension in dimension_by_slot.items() if dimension is not None
+    }
+    assert dimension_ids.keys() == dimension_by_slot.keys()
     created_by_count = {8: all_inline}
 
     for count in range(8):
         plan = MasterCodeCreatePlan(
             **{
-                slot: (
-                    ExistingDimension(dimension_by_slot[slot].id)
-                    if index < count
-                    else NotApplicable()
-                )
+                slot: (ExistingDimension(dimension_ids[slot]) if index < count else NotApplicable())
                 for index, slot in enumerate(MasterCodeDimensions.ORDER)
             }
         )
