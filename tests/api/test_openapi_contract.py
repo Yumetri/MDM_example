@@ -118,6 +118,14 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
             "name": "Category Dimensions",
             "description": "Category Dimension을 생성하고 활성 데이터를 조회합니다.",
         },
+        {
+            "name": "Year Dimensions",
+            "description": "Year Dimension을 생성하고 활성 데이터를 조회합니다.",
+        },
+        {
+            "name": "Network Dimensions",
+            "description": "Network Dimension을 생성하고 활성 데이터를 조회합니다.",
+        },
     ]
 
     live = paths["/health/live"]["get"]
