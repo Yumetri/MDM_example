@@ -14,11 +14,13 @@ def configure_openapi(application: FastAPI) -> None:
                 content = response.get("content", {})
                 if "application/problem+json" in content:
                     content.pop("application/json", None)
-    company_schema = schema.get("components", {}).get("schemas", {}).get("CompanyResponse")
-    if company_schema is not None:
-        company_schema["example"]["deleted_at"] = None
-    company_list_schema = schema.get("components", {}).get("schemas", {}).get("CompanyListResponse")
-    if company_list_schema is not None:
-        for item in company_list_schema["example"]["items"]:
-            item["deleted_at"] = None
+    schemas = schema.get("components", {}).get("schemas", {})
+    for name in ("Company", "Model", "Brand", "Country", "Category"):
+        response_schema = schemas.get(f"{name}Response")
+        if response_schema is not None:
+            response_schema["example"]["deleted_at"] = None
+        list_schema = schemas.get(f"{name}ListResponse")
+        if list_schema is not None:
+            for item in list_schema["example"]["items"]:
+                item["deleted_at"] = None
     application.openapi_schema = schema

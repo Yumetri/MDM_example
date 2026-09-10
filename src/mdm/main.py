@@ -19,11 +19,20 @@ from mdm.api.errors import (
     dimension_validation_error_handler,
     invalid_access_token_handler,
     readiness_unavailable_handler,
+    string_dimension_conflict_handler,
+    string_dimension_not_found_handler,
+    string_dimension_repository_unavailable_handler,
     unexpected_error_handler,
     validation_error_handler,
 )
 from mdm.api.health import build_health_router
 from mdm.api.openapi import configure_openapi
+from mdm.api.string_dimensions import (
+    build_brand_router,
+    build_category_router,
+    build_country_router,
+    build_model_router,
+)
 from mdm.application.audit import HumanMutationAuditFactory
 from mdm.application.auth import AuthenticateHumanPrincipal, InvalidAccessToken
 from mdm.application.authorization import AuthorizationDenied, AuthorizationPolicy
@@ -38,6 +47,25 @@ from mdm.application.dimensions import (
     ListCompanies,
 )
 from mdm.application.health import CheckReadiness, ReadinessCheck, ReadinessUnavailable
+from mdm.application.string_dimensions import (
+    CreateBrand,
+    CreateCategory,
+    CreateCountry,
+    CreateModel,
+    GetBrand,
+    GetCategory,
+    GetCountry,
+    GetModel,
+    ListBrands,
+    ListCategories,
+    ListCountries,
+    ListModels,
+    StringDimensionCodeConflict,
+    StringDimensionMultipleConflicts,
+    StringDimensionNotFound,
+    StringDimensionRepositoryUnavailable,
+    StringDimensionValueConflict,
+)
 from mdm.domain.dimensions import DimensionValidationError
 from mdm.infrastructure.database import (
     SqlAlchemyDatabaseProbe,
@@ -47,6 +75,12 @@ from mdm.infrastructure.database import (
 from mdm.infrastructure.jwt import RejectingAccessTokenVerifier, build_access_jwt_codec
 from mdm.infrastructure.operational_events import JsonLineOperationalEventSink
 from mdm.infrastructure.repositories.companies import SqlAlchemyCompanyRepository
+from mdm.infrastructure.repositories.string_dimensions import (
+    SqlAlchemyBrandRepository,
+    SqlAlchemyCategoryRepository,
+    SqlAlchemyCountryRepository,
+    SqlAlchemyModelRepository,
+)
 from mdm.infrastructure.settings import Settings
 from mdm.infrastructure.uuid7 import Uuid7Generator
 
@@ -55,11 +89,13 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
     """Assemble the API, application services, and infrastructure adapters."""
     engine: AsyncEngine | None = None
     company_router = None
+    string_dimension_routers = []
     if readiness_check is None:
         settings = Settings()
         engine = create_engine(settings.reveal_database_url())
         readiness_check = CheckReadiness(SqlAlchemyDatabaseProbe(engine))
-        repository = SqlAlchemyCompanyRepository(create_session_factory(engine))
+        session_factory = create_session_factory(engine)
+        repository = SqlAlchemyCompanyRepository(session_factory)
         if (
             settings.auth_jwt_active_kid is None
             and settings.auth_jwt_private_key_path is None
@@ -74,16 +110,58 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
             clock=lambda: datetime.now(UTC),
         )
         authorization = AuthorizationPolicy()
+        principal_dependency = build_human_principal_dependency(authenticate)
+        audit_factory = HumanMutationAuditFactory(change_set_ids=Uuid7Generator().new)
         company_router = build_company_router(
             create_company=CreateCompany(
                 repository,
                 authorization,
-                HumanMutationAuditFactory(change_set_ids=Uuid7Generator().new),
+                audit_factory,
             ),
             get_company=GetCompany(repository, authorization),
             list_companies=ListCompanies(repository, authorization),
-            principal_dependency=build_human_principal_dependency(authenticate),
+            principal_dependency=principal_dependency,
             authorization=authorization,
+        )
+        model_repository = SqlAlchemyModelRepository(session_factory)
+        string_dimension_routers.append(
+            build_model_router(
+                create_dimension=CreateModel(model_repository, authorization, audit_factory),
+                get_dimension=GetModel(model_repository, authorization),
+                list_dimensions=ListModels(model_repository, authorization),
+                principal_dependency=principal_dependency,
+                authorization=authorization,
+            )
+        )
+        brand_repository = SqlAlchemyBrandRepository(session_factory)
+        string_dimension_routers.append(
+            build_brand_router(
+                create_dimension=CreateBrand(brand_repository, authorization, audit_factory),
+                get_dimension=GetBrand(brand_repository, authorization),
+                list_dimensions=ListBrands(brand_repository, authorization),
+                principal_dependency=principal_dependency,
+                authorization=authorization,
+            )
+        )
+        country_repository = SqlAlchemyCountryRepository(session_factory)
+        string_dimension_routers.append(
+            build_country_router(
+                create_dimension=CreateCountry(country_repository, authorization, audit_factory),
+                get_dimension=GetCountry(country_repository, authorization),
+                list_dimensions=ListCountries(country_repository, authorization),
+                principal_dependency=principal_dependency,
+                authorization=authorization,
+            )
+        )
+        category_repository = SqlAlchemyCategoryRepository(session_factory)
+        string_dimension_routers.append(
+            build_category_router(
+                create_dimension=CreateCategory(category_repository, authorization, audit_factory),
+                get_dimension=GetCategory(category_repository, authorization),
+                list_dimensions=ListCategories(category_repository, authorization),
+                principal_dependency=principal_dependency,
+                authorization=authorization,
+            )
         )
 
     @asynccontextmanager
@@ -107,6 +185,22 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
             {
                 "name": "Company Dimensions",
                 "description": "Company Dimension을 생성하고 활성 데이터를 조회합니다.",
+            },
+            {
+                "name": "Model Dimensions",
+                "description": "Model Dimension을 생성하고 활성 데이터를 조회합니다.",
+            },
+            {
+                "name": "Brand Dimensions",
+                "description": "Brand Dimension을 생성하고 활성 데이터를 조회합니다.",
+            },
+            {
+                "name": "Country Dimensions",
+                "description": "Country Dimension을 생성하고 활성 데이터를 조회합니다.",
+            },
+            {
+                "name": "Category Dimensions",
+                "description": "Category Dimension을 생성하고 활성 데이터를 조회합니다.",
             },
         ],
         docs_url=None,
@@ -135,6 +229,17 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         CompanyMultipleConflicts,
     ):
         application.add_exception_handler(conflict_type, company_conflict_handler)
+    application.add_exception_handler(StringDimensionNotFound, string_dimension_not_found_handler)
+    application.add_exception_handler(
+        StringDimensionRepositoryUnavailable,
+        string_dimension_repository_unavailable_handler,
+    )
+    for conflict_type in (
+        StringDimensionCodeConflict,
+        StringDimensionValueConflict,
+        StringDimensionMultipleConflicts,
+    ):
+        application.add_exception_handler(conflict_type, string_dimension_conflict_handler)
     application.add_exception_handler(
         ReadinessUnavailable,
         readiness_unavailable_handler,
@@ -147,6 +252,8 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
     application.include_router(build_health_router(readiness_check))
     if company_router is not None:
         application.include_router(company_router)
+    for router in string_dimension_routers:
+        application.include_router(router)
     application.include_router(build_documentation_router(application))
     configure_openapi(application)
     return application
