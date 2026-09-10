@@ -92,8 +92,6 @@ class MasterCodeDimensions:
             if not isinstance(dimension.value, self._VALUE_TYPES[slot]):
                 display_name = slot.title()
                 raise MasterCodeValidationError(f"{slot} must contain a {display_name} value")
-            if dimension.is_deleted:
-                raise MasterCodeValidationError(f"{slot} Dimension must be active")
 
     def ordered(self) -> tuple[MasterCodeDimension | None, ...]:
         """Return the slots in the one canonical composition order."""
@@ -120,6 +118,14 @@ class MasterCode:
             raise MasterCodeValidationError("id must be a UUID")
         if not isinstance(self.dimensions, MasterCodeDimensions):
             raise MasterCodeValidationError("dimensions are invalid")
+        if self.deleted_at is None:
+            for slot, dimension in zip(
+                MasterCodeDimensions.ORDER,
+                self.dimensions.ordered(),
+                strict=True,
+            ):
+                if dimension is not None and dimension.is_deleted:
+                    raise MasterCodeValidationError(f"{slot} Dimension must be active")
         if self.code != self.compose(self.dimensions):
             raise MasterCodeValidationError("code does not match the current Dimension references")
         if type(self.version) is not int or self.version < 1:

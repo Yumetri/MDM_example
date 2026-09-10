@@ -71,7 +71,36 @@ def test_master_code_uses_nnn_for_every_not_applicable_slot() -> None:
     )
 
 
-def test_master_code_rejects_inactive_or_wrong_typed_dimensions() -> None:
+def test_master_code_rejects_wrong_typed_dimensions() -> None:
+    with pytest.raises(MasterCodeValidationError, match="Company"):
+        MasterCodeDimensions(company=_dimension(2, "BRA", BrandValue("brand")))
+
+
+def test_master_code_tombstone_retains_deleted_dimension_reference() -> None:
+    deleted = Dimension(
+        id=UUID("00000000-0000-7000-8000-000000000001"),
+        code=DimensionCode("COM"),
+        value=CompanyValue("company"),
+        version=2,
+        created_at=NOW,
+        updated_at=NOW,
+        deleted_at=NOW,
+    )
+
+    tombstone = MasterCode(
+        id=UUID("00000000-0000-7000-8000-000000000009"),
+        dimensions=MasterCodeDimensions(company=deleted),
+        code="COM-NNN-NNN-NNN-NNN-NNN-NNN-NNN",
+        version=2,
+        created_at=NOW,
+        updated_at=NOW,
+        deleted_at=NOW,
+    )
+
+    assert tombstone.dimensions.company is deleted
+
+
+def test_active_master_code_rejects_deleted_dimension_reference() -> None:
     deleted = Dimension(
         id=UUID("00000000-0000-7000-8000-000000000001"),
         code=DimensionCode("COM"),
@@ -83,9 +112,15 @@ def test_master_code_rejects_inactive_or_wrong_typed_dimensions() -> None:
     )
 
     with pytest.raises(MasterCodeValidationError, match="active"):
-        MasterCodeDimensions(company=deleted)
-    with pytest.raises(MasterCodeValidationError, match="Company"):
-        MasterCodeDimensions(company=_dimension(2, "BRA", BrandValue("brand")))
+        MasterCode(
+            id=UUID("00000000-0000-7000-8000-000000000009"),
+            dimensions=MasterCodeDimensions(company=deleted),
+            code="COM-NNN-NNN-NNN-NNN-NNN-NNN-NNN",
+            version=1,
+            created_at=NOW,
+            updated_at=NOW,
+            deleted_at=None,
+        )
 
 
 def test_master_code_etag_changes_when_a_nested_dimension_version_changes() -> None:
