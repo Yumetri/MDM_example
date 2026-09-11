@@ -23,6 +23,7 @@ from mdm.application.auth import (
 from mdm.application.authorization import AuthorizationPolicy
 from mdm.application.master_codes import (
     CreateMasterCode,
+    ExistingDimension,
     GetMasterCode,
     InlineDimension,
     InlineDimensionConflict,
@@ -31,10 +32,15 @@ from mdm.application.master_codes import (
     MasterCodeConflict,
     MasterCodeCreatePlan,
     MasterCodeCursor,
+    MasterCodeNotFound,
     MasterCodePage,
+    MasterCodeReferenceUpdate,
     MasterCodeRepository,
+    NotApplicable,
+    UpdateMasterCodeReferences,
 )
-from mdm.domain.audit import MutationAuditMetadata
+from mdm.application.preconditions import PreconditionFailed
+from mdm.domain.audit import MasterCodeOperation, MutationAuditMetadata
 from mdm.domain.auth import UserRole
 from mdm.domain.dimensions import CompanyValue, DimensionCode
 from mdm.domain.master_codes import MasterCode, MasterCodeDimensions
@@ -82,6 +88,10 @@ class FakeMasterCodeRepository(MasterCodeRepository):
         self.created: tuple[MasterCodeCreatePlan, MutationAuditMetadata] | None = None
         self.list_after: MasterCodeCursor | None = None
         self.create_failure: Exception | None = None
+        self.update_failure: Exception | None = None
+        self.updated: tuple[UUID, MasterCodeReferenceUpdate, str, MutationAuditMetadata] | None = (
+            None
+        )
 
     async def create(self, plan: MasterCodeCreatePlan, audit: MutationAuditMetadata) -> MasterCode:
         if self.create_failure is not None:
@@ -95,6 +105,18 @@ class FakeMasterCodeRepository(MasterCodeRepository):
     async def list_active(self, *, after: MasterCodeCursor | None, limit: int) -> MasterCodePage:
         self.list_after = after
         return MasterCodePage(items=(self.master_code,), has_more=after is None)
+
+    async def update_references(
+        self,
+        master_code_id: UUID,
+        changes: MasterCodeReferenceUpdate,
+        expected_etag: str,
+        audit: MutationAuditMetadata,
+    ) -> MasterCode:
+        if self.update_failure is not None:
+            raise self.update_failure
+        self.updated = (master_code_id, changes, expected_etag, audit)
+        return self.master_code
 
 
 def build_application(repository: FakeMasterCodeRepository) -> FastAPI:
@@ -113,6 +135,11 @@ def build_application(repository: FakeMasterCodeRepository) -> FastAPI:
             ),
             get_master_code=GetMasterCode(repository, policy),
             list_master_codes=ListMasterCodes(repository, policy),
+            update_master_code_references=UpdateMasterCodeReferences(
+                repository,
+                policy,
+                HumanMutationAuditFactory(change_set_ids=lambda: CHANGE_SET_ID),
+            ),
             principal_dependency=principal_dependency,
             authorization=policy,
         )
@@ -264,6 +291,143 @@ async def test_authenticated_user_reads_detail_and_dimension_style_cursor_page()
 
 
 @pytest.mark.api
+async def test_admin_partially_updates_master_code_references_with_aggregate_etag() -> None:
+    repository = FakeMasterCodeRepository()
+    expected_etag = '"mc-1-' + "a" * 64 + '"'
+
+    async with client_for(repository) as client:
+        response = await client.patch(
+            f"/api/v1/master-codes/{MASTER_CODE_ID}",
+            headers={"Authorization": "Bearer ADMIN", "If-Match": expected_etag},
+            json={
+                "dimensions": {
+                    "company": {"mode": "REFERENCE", "id": str(USER_ID)},
+                    "country": {"mode": "NOT_APPLICABLE"},
+                },
+                "reason": "참조 정정",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["etag"] == repository.master_code.etag()
+    assert repository.updated is not None
+    master_code_id, changes, received_etag, audit = repository.updated
+    assert master_code_id == MASTER_CODE_ID
+    assert changes.company == ExistingDimension(USER_ID)
+    assert isinstance(changes.country, NotApplicable)
+    assert changes.brand is None
+    assert received_etag == expected_etag
+    assert audit.operations.master_code is MasterCodeOperation.REFERENCE_UPDATE
+
+
+@pytest.mark.api
+@pytest.mark.parametrize(
+    ("headers", "status", "code"),
+    [
+        ({}, 428, "PRECONDITION_REQUIRED"),
+        ({"If-Match": "*"}, 400, "INVALID_IF_MATCH"),
+        ({"If-Match": 'W/"mc-1-' + "a" * 64 + '"'}, 400, "INVALID_IF_MATCH"),
+        ({"If-Match": '"mc-1-' + "A" * 64 + '"'}, 400, "INVALID_IF_MATCH"),
+    ],
+)
+async def test_master_code_reference_update_requires_one_canonical_strong_etag(
+    headers: dict[str, str], status: int, code: str
+) -> None:
+    repository = FakeMasterCodeRepository()
+
+    async with client_for(repository) as client:
+        response = await client.patch(
+            f"/api/v1/master-codes/{MASTER_CODE_ID}",
+            headers={"Authorization": "Bearer ADMIN", **headers},
+            json={"dimensions": {"company": {"mode": "NOT_APPLICABLE"}}},
+        )
+
+    assert response.status_code == status
+    assert response.json()["code"] == code
+    assert repository.updated is None
+
+
+@pytest.mark.api
+async def test_master_code_reference_update_rejects_repeated_etag_empty_patch_and_user() -> None:
+    repository = FakeMasterCodeRepository()
+    expected_etag = '"mc-1-' + "a" * 64 + '"'
+
+    async with client_for(repository) as client:
+        repeated = await client.patch(
+            f"/api/v1/master-codes/{MASTER_CODE_ID}",
+            headers=[
+                ("Authorization", "Bearer ADMIN"),
+                ("If-Match", expected_etag),
+                ("If-Match", expected_etag),
+            ],
+            json={"dimensions": {"company": {"mode": "NOT_APPLICABLE"}}},
+        )
+        empty = await client.patch(
+            f"/api/v1/master-codes/{MASTER_CODE_ID}",
+            headers={"Authorization": "Bearer ADMIN", "If-Match": expected_etag},
+            json={"dimensions": {}},
+        )
+        inline_create = await client.patch(
+            f"/api/v1/master-codes/{MASTER_CODE_ID}",
+            headers={"Authorization": "Bearer ADMIN", "If-Match": expected_etag},
+            json={"dimensions": {"company": {"mode": "CREATE", "code": "COM", "value": "Company"}}},
+        )
+        denied = await client.patch(
+            f"/api/v1/master-codes/{MASTER_CODE_ID}",
+            headers={"Authorization": "Bearer USER", "If-Match": expected_etag},
+            json={"dimensions": {"company": {"mode": "NOT_APPLICABLE"}}},
+        )
+
+    assert repeated.status_code == 400
+    assert repeated.json()["code"] == "INVALID_IF_MATCH"
+    assert empty.status_code == 422
+    assert empty.json()["code"] == "VALIDATION_ERROR"
+    assert inline_create.status_code == 422
+    assert inline_create.json()["code"] == "VALIDATION_ERROR"
+    assert denied.status_code == 403
+    assert repository.updated is None
+
+
+@pytest.mark.api
+@pytest.mark.parametrize(
+    ("failure", "status", "code", "violation_fields"),
+    [
+        (MasterCodeNotFound(), 404, "MASTER_CODE_NOT_FOUND", []),
+        (MasterCodeConflict(), 409, "MASTER_CODE_CONFLICT", []),
+        (PreconditionFailed(), 412, "PRECONDITION_FAILED", []),
+        (
+            InvalidDimensionReference(("dimensions.company.id",)),
+            422,
+            "INVALID_DIMENSION_REFERENCE",
+            ["body.dimensions.company.id"],
+        ),
+    ],
+)
+async def test_reference_update_translates_contract_errors(
+    failure: Exception,
+    status: int,
+    code: str,
+    violation_fields: list[str],
+) -> None:
+    repository = FakeMasterCodeRepository()
+    repository.update_failure = failure
+
+    async with client_for(repository) as client:
+        response = await client.patch(
+            f"/api/v1/master-codes/{MASTER_CODE_ID}",
+            headers={
+                "Authorization": "Bearer ADMIN",
+                "If-Match": '"mc-1-' + "a" * 64 + '"',
+            },
+            json={"dimensions": {"company": {"mode": "NOT_APPLICABLE"}}},
+        )
+
+    assert response.status_code == status
+    assert response.json()["code"] == code
+    assert [item["field"] for item in response.json().get("violations", [])] == violation_fields
+
+
+@pytest.mark.api
 def test_master_code_openapi_has_stable_operations_and_strict_slots() -> None:
     schema = create_app().openapi()
     collection = schema["paths"]["/api/v1/master-codes"]
@@ -272,6 +436,22 @@ def test_master_code_openapi_has_stable_operations_and_strict_slots() -> None:
     assert collection["post"]["operationId"] == "create_master_code"
     assert collection["get"]["operationId"] == "list_master_codes"
     assert detail["get"]["operationId"] == "get_master_code"
+    assert detail["patch"]["operationId"] == "update_master_code_references"
+    reference_updates = schema["components"]["schemas"]["MasterCodeReferenceUpdatesInput"]
+    assert reference_updates["minProperties"] == 1
+    assert "required" not in reference_updates
+    assert reference_updates["additionalProperties"] is False
+    patch_example = detail["patch"]["responses"]["200"]["content"]["application/json"]["example"]
+    assert patch_example["deleted_at"] is None
+    assert patch_example["dimensions"]["model"] is None
+    assert patch_example["dimensions"]["country"] is None
+    patch_conflict = detail["patch"]["responses"]["409"]["content"]["application/problem+json"]
+    assert "examples" not in patch_conflict
+    assert patch_conflict["example"]["code"] == "MASTER_CODE_CONFLICT"
+    assert patch_conflict["example"]["instance"].endswith(str(MASTER_CODE_ID))
+    assert detail["patch"]["responses"]["503"]["content"]["application/problem+json"]["example"][
+        "instance"
+    ].endswith(str(MASTER_CODE_ID))
     dimensions = schema["components"]["schemas"]["MasterCodeDimensionsInput"]
     assert set(dimensions["required"]) == set(_all_not_applicable())
     assert dimensions["additionalProperties"] is False
