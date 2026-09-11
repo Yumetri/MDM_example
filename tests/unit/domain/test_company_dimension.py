@@ -102,3 +102,50 @@ def test_normalized_value_noop_returns_the_same_dimension() -> None:
     )
 
     assert dimension.change_value(CompanyValue(" samsung "), changed_at=timestamp) is dimension
+
+
+def test_dimension_code_and_value_change_share_one_version_increment() -> None:
+    created_at = datetime(2033, 5, 18, tzinfo=UTC)
+    changed_at = datetime(2033, 5, 19, tzinfo=UTC)
+    dimension = Dimension(
+        id=UUID("01890f7c-8abc-7def-8abc-0123456789ab"),
+        code=DimensionCode("SAM"),
+        value=CompanyValue("Samsung"),
+        version=1,
+        created_at=created_at,
+        updated_at=created_at,
+        deleted_at=None,
+    )
+
+    changed = dimension.change(
+        code=DimensionCode("APP"),
+        value=CompanyValue("Apple"),
+        changed_at=changed_at,
+    )
+
+    assert changed.code == DimensionCode("APP")
+    assert changed.value == CompanyValue("APPLE")
+    assert changed.version == 2
+    assert changed.updated_at == changed_at
+
+
+def test_normalized_code_and_value_noop_returns_the_same_dimension() -> None:
+    timestamp = datetime(2033, 5, 18, tzinfo=UTC)
+    dimension = Dimension(
+        id=UUID("01890f7c-8abc-7def-8abc-0123456789ab"),
+        code=DimensionCode("SAM"),
+        value=CompanyValue("Samsung"),
+        version=1,
+        created_at=timestamp,
+        updated_at=timestamp,
+        deleted_at=None,
+    )
+
+    assert (
+        dimension.change(
+            code=DimensionCode("sam"),
+            value=CompanyValue(" samsung "),
+            changed_at=timestamp,
+        )
+        is dimension
+    )

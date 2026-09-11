@@ -192,3 +192,37 @@ class MasterCode:
         ).encode("utf-8")
         digest = hashlib.sha256(payload).hexdigest()
         return f'"mc-{self.ETAG_ALGORITHM_VERSION}-{digest}"'
+
+    def recompose(
+        self,
+        *,
+        dimensions: MasterCodeDimensions,
+        changed_at: datetime,
+    ) -> "MasterCode":
+        """Return the next state after one referenced Dimension code changes."""
+        if not isinstance(dimensions, MasterCodeDimensions):
+            raise MasterCodeValidationError("dimensions are invalid")
+        current_ids = tuple(
+            None if dimension is None else dimension.id for dimension in self.dimensions.ordered()
+        )
+        next_ids = tuple(
+            None if dimension is None else dimension.id for dimension in dimensions.ordered()
+        )
+        if next_ids != current_ids:
+            raise MasterCodeValidationError("recomposition must preserve Dimension references")
+        code = self.compose(dimensions)
+        if code == self.code:
+            return self
+        if changed_at.utcoffset() is None:
+            raise MasterCodeValidationError("changed_at must be timezone-aware")
+        if changed_at < self.updated_at:
+            raise MasterCodeValidationError("changed_at must not precede updated_at")
+        return MasterCode(
+            id=self.id,
+            dimensions=dimensions,
+            code=code,
+            version=self.version + 1,
+            created_at=self.created_at,
+            updated_at=changed_at,
+            deleted_at=self.deleted_at,
+        )

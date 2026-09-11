@@ -15,7 +15,7 @@ from mdm.application.dimensions import (
     ListCompanies,
     UpdateCompanyValue,
 )
-from mdm.domain.audit import DimensionOperation, MutationAuditMetadata
+from mdm.domain.audit import DimensionOperation, MasterCodeOperation, MutationAuditMetadata
 from mdm.domain.auth import UserRole
 from mdm.domain.dimensions import CompanyValue, Dimension, DimensionCode
 
@@ -31,7 +31,10 @@ class RecordingCompanyRepository(CompanyRepository):
         self.create_call: tuple[DimensionCode, CompanyValue, MutationAuditMetadata] | None = None
         self.get_call: UUID | None = None
         self.list_call: tuple[CompanyCursor | None, int] | None = None
-        self.update_call: tuple[UUID, int, CompanyValue, MutationAuditMetadata] | None = None
+        self.update_call: (
+            tuple[UUID, int, CompanyValue | None, MutationAuditMetadata, DimensionCode | None]
+            | None
+        ) = None
         self.company = Dimension(
             id=COMPANY_ID,
             code=DimensionCode("SAM"),
@@ -64,8 +67,8 @@ class RecordingCompanyRepository(CompanyRepository):
         self.list_call = (after, limit)
         return CompanyPage(items=(self.company,), has_more=False)
 
-    async def update_value(self, company_id, expected_version, value, audit):
-        self.update_call = (company_id, expected_version, value, audit)
+    async def update_value(self, company_id, expected_version, value, audit, *, code=None):
+        self.update_call = (company_id, expected_version, value, audit, code)
         return self.company
 
 
@@ -135,12 +138,39 @@ async def test_admin_updates_company_value_with_one_human_update_context() -> No
 
     assert result is repository.company
     assert repository.update_call is not None
-    dimension_id, expected_version, value, audit = repository.update_call
+    dimension_id, expected_version, value, audit, code = repository.update_call
     assert dimension_id == COMPANY_ID
     assert expected_version == 1
     assert value == CompanyValue("APPLE_KOREA")
+    assert code is None
     assert audit.operations.dimension is DimensionOperation.UPDATE
     assert audit.reason == "수정"
+
+
+@pytest.mark.unit
+async def test_admin_code_update_adds_master_code_recompose_context() -> None:
+    repository = RecordingCompanyRepository()
+    use_case = UpdateCompanyValue(
+        repository,
+        AuthorizationPolicy(),
+        HumanMutationAuditFactory(change_set_ids=lambda: CHANGE_SET_ID),
+    )
+
+    await use_case.execute(
+        _principal(UserRole.SUPER_ADMIN),
+        COMPANY_ID,
+        expected_version=1,
+        code="app",
+        reason=" 코드 수정 ",
+    )
+
+    assert repository.update_call is not None
+    _, _, value, audit, code = repository.update_call
+    assert value is None
+    assert code == DimensionCode("APP")
+    assert audit.operations.dimension is DimensionOperation.UPDATE
+    assert audit.operations.master_code is MasterCodeOperation.RECOMPOSE
+    assert audit.reason == "코드 수정"
 
 
 @pytest.mark.unit

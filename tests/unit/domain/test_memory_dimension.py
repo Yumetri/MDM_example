@@ -1,6 +1,19 @@
+from datetime import UTC, datetime
+from uuid import UUID
+
 import pytest
 
-from mdm.domain.dimensions import DimensionValidationError, MemoryUnit, MemoryValue
+from mdm.domain.dimensions import (
+    Dimension,
+    DimensionCode,
+    DimensionValidationError,
+    MemoryUnit,
+    MemoryValue,
+)
+
+MEMORY_ID = UUID("01890f7c-8abc-7def-8abc-222222222222")
+CREATED_AT = datetime(2033, 5, 18, 3, 33, 20, tzinfo=UTC)
+CHANGED_AT = datetime(2033, 5, 18, 3, 33, 21, tzinfo=UTC)
 
 
 @pytest.mark.unit
@@ -42,3 +55,26 @@ def test_memory_value_rejects_unknown_or_control_character_unit(unit: object) ->
         MemoryValue.create(amount=1, unit=unit)  # type: ignore[arg-type]
 
     assert captured.value.field == "value.unit"
+
+
+@pytest.mark.unit
+def test_memory_code_change_preserves_equivalent_stored_value_representation() -> None:
+    current = Dimension(
+        id=MEMORY_ID,
+        code=DimensionCode("MEM1T"),
+        value=MemoryValue(amount=1, unit=MemoryUnit.TB),
+        version=1,
+        created_at=CREATED_AT,
+        updated_at=CREATED_AT,
+        deleted_at=None,
+    )
+
+    changed = current.change(
+        code=DimensionCode("MEM1000G"),
+        value=MemoryValue(amount=1000, unit=MemoryUnit.GB),
+        changed_at=CHANGED_AT,
+    )
+
+    assert changed.code == DimensionCode("MEM1000G")
+    assert changed.value is current.value
+    assert changed.version == 2

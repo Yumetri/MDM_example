@@ -78,7 +78,9 @@ class FakeMemoryRepository(MemoryRepository):
         )
         self.created: tuple[DimensionCode, MemoryValue, MutationAuditMetadata] | None = None
         self.list_after: MemoryDimensionCursor | None = None
-        self.updated: tuple[UUID, int, MemoryValue, MutationAuditMetadata] | None = None
+        self.updated: (
+            tuple[UUID, int, MemoryValue | None, MutationAuditMetadata, DimensionCode | None] | None
+        ) = None
 
     async def create(self, code, value, audit):
         self.created = (code, value, audit)
@@ -91,9 +93,9 @@ class FakeMemoryRepository(MemoryRepository):
         self.list_after = after
         return MemoryDimensionPage(items=(self.memory,), has_more=after is None)
 
-    async def update_value(self, dimension_id, expected_version, value, audit):
-        self.updated = (dimension_id, expected_version, value, audit)
-        return self.memory.change_value(value, changed_at=LATER)
+    async def update_value(self, dimension_id, expected_version, value, audit, *, code=None):
+        self.updated = (dimension_id, expected_version, value, audit, code)
+        return self.memory.change(code=code, value=value, changed_at=LATER)
 
 
 def build_application(repository: FakeMemoryRepository) -> FastAPI:

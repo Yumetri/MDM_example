@@ -14,6 +14,7 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mdm.application.audit import MutationAuditContextUnavailable
+from mdm.application.master_codes import MasterCodeConflict
 from mdm.application.memory_dimensions import (
     MemoryDimensionCodeConflict,
     MemoryDimensionCursor,
@@ -28,6 +29,10 @@ from mdm.domain.audit import MutationAuditMetadata
 from mdm.domain.dimensions import Dimension, DimensionCode, MemoryUnit, MemoryValue
 from mdm.infrastructure.audit_context import SqlAlchemyMutationAuditContextWriter
 from mdm.infrastructure.models import MemoryRecord
+from mdm.infrastructure.repositories.master_codes import (
+    lock_referencing_master_codes,
+    recompose_locked_master_codes,
+)
 
 
 class SqlAlchemyMemoryRepository:
@@ -102,8 +107,10 @@ class SqlAlchemyMemoryRepository:
         self,
         dimension_id: UUID,
         expected_version: int,
-        value: MemoryValue,
+        value: MemoryValue | None,
         audit: MutationAuditMetadata,
+        *,
+        code: DimensionCode | None = None,
     ) -> Dimension[MemoryValue]:
         try:
             async with self._session_factory.begin() as session:
@@ -120,31 +127,80 @@ class SqlAlchemyMemoryRepository:
                 current = _to_domain(record)
                 if current.version != expected_version:
                     raise PreconditionFailed
-                if current.value.capacity_mb == value.capacity_mb:
+                code_changed = code is not None and code != current.code
+                value_changed = value is not None and value.capacity_mb != current.value.capacity_mb
+                if not code_changed and not value_changed:
                     return current
-                conflict = await session.scalar(
-                    select(MemoryRecord.id).where(
-                        MemoryRecord.id != dimension_id,
-                        MemoryRecord.capacity_mb == value.capacity_mb,
+
+                conflict_conditions = []
+                if code_changed:
+                    assert code is not None
+                    conflict_conditions.append(MemoryRecord.code == code.value)
+                if value_changed:
+                    assert value is not None
+                    conflict_conditions.append(MemoryRecord.capacity_mb == value.capacity_mb)
+                conflicts = (
+                    await session.execute(
+                        select(MemoryRecord.code, MemoryRecord.capacity_mb).where(
+                            MemoryRecord.id != dimension_id,
+                            or_(*conflict_conditions),
+                        )
                     )
+                ).all()
+                _raise_conflict(
+                    code_conflict=(
+                        code_changed
+                        and code is not None
+                        and any(row.code == code.value for row in conflicts)
+                    ),
+                    value_conflict=(
+                        value_changed
+                        and value is not None
+                        and any(row.capacity_mb == value.capacity_mb for row in conflicts)
+                    ),
                 )
-                if conflict is not None:
-                    raise MemoryDimensionValueConflict
+
+                locked_master_codes = (
+                    await lock_referencing_master_codes(
+                        session,
+                        slot="memory",
+                        dimension_id=dimension_id,
+                    )
+                    if code_changed
+                    else ()
+                )
+                minimum_timestamp = max(
+                    (current.updated_at, *(item.current.updated_at for item in locked_master_codes))
+                )
 
                 changed_at = await SqlAlchemyMutationAuditContextWriter(session).set_context(
-                    audit, minimum_timestamp=current.updated_at
+                    audit, minimum_timestamp=minimum_timestamp
                 )
-                changed = current.change_value(value, changed_at=changed_at)
-                record.amount = changed.value.amount
-                record.unit = changed.value.unit.value
+                changed = current.change(code=code, value=value, changed_at=changed_at)
+                if code_changed:
+                    recompose_locked_master_codes(
+                        locked_master_codes,
+                        slot="memory",
+                        dimension=changed,
+                        changed_at=changed_at,
+                    )
+                    record.code = changed.code.value
+                if value_changed:
+                    record.amount = changed.value.amount
+                    record.unit = changed.value.unit.value
                 record.version = changed.version
                 record.updated_at = changed.updated_at
                 await session.flush()
                 await session.refresh(record)
                 return _to_domain(record)
         except IntegrityError as error:
-            if _constraint_name(error) == "uq_dimension_memories_capacity_mb":
+            constraint_name = _constraint_name(error)
+            if constraint_name == "uq_dimension_memories_code":
+                raise MemoryDimensionCodeConflict from None
+            if constraint_name == "uq_dimension_memories_capacity_mb":
                 raise MemoryDimensionValueConflict from None
+            if constraint_name in {"uq_master_codes_code", "uq_master_codes_references"}:
+                raise MasterCodeConflict from None
             raise
         except MutationAuditContextUnavailable:
             raise MemoryDimensionRepositoryUnavailable from None

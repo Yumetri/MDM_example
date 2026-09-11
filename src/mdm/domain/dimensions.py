@@ -245,7 +245,21 @@ class Dimension[ValueT]:
 
     def change_value(self, value: ValueT, *, changed_at: datetime) -> "Dimension[ValueT]":
         """Return the next immutable state for one logical value change."""
-        if _dimension_values_equal(self.value, value):
+        return self.change(code=None, value=value, changed_at=changed_at)
+
+    def change(
+        self,
+        *,
+        code: DimensionCode | None,
+        value: ValueT | None,
+        changed_at: datetime,
+    ) -> "Dimension[ValueT]":
+        """Return one next state for an optional code and value mutation."""
+        next_code = self.code if code is None else code
+        next_value = (
+            self.value if value is None or _dimension_values_equal(self.value, value) else value
+        )
+        if next_code == self.code and _dimension_values_equal(self.value, next_value):
             return self
         if changed_at.utcoffset() is None:
             raise DimensionValidationError("updated_at", "시간대가 포함된 시각이어야 합니다.")
@@ -253,8 +267,8 @@ class Dimension[ValueT]:
             raise DimensionValidationError("updated_at", "현재 updated_at보다 빠를 수 없습니다.")
         return Dimension(
             id=self.id,
-            code=self.code,
-            value=value,
+            code=next_code,
+            value=next_value,
             version=self.version + 1,
             created_at=self.created_at,
             updated_at=changed_at,

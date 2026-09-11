@@ -9,7 +9,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
 from mdm.api.auth import INVALID_ACCESS_TOKEN_RESPONSE
 from mdm.api.authorization import AUTHORIZATION_DENIED_RESPONSE, build_authorization_guard
@@ -151,25 +151,35 @@ class CategoryCreateRequest(_StringDimensionCreateRequest):
 
 
 class _StringDimensionValueUpdateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    value: Annotated[StrictStr, _value_field(" New Value ")]
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"anyOf": [{"required": ["code"]}, {"required": ["value"]}]},
+    )
+    code: Annotated[StrictStr, _code_field("new")] = None  # type: ignore[assignment]
+    value: Annotated[StrictStr, _value_field(" New Value ")] = None  # type: ignore[assignment]
     reason: Annotated[StrictStr | None, _reason_field("수정")] = None
+
+    @model_validator(mode="after")
+    def require_business_field(self) -> "_StringDimensionValueUpdateRequest":
+        if not self.model_fields_set.intersection({"code", "value"}):
+            raise ValueError("code 또는 value 중 하나 이상을 입력해야 합니다.")
+        return self
 
 
 class ModelValueUpdateRequest(_StringDimensionValueUpdateRequest):
-    """Model Dimension value 수정 입력입니다."""
+    """Model Dimension code 또는 value 수정 입력입니다."""
 
 
 class BrandValueUpdateRequest(_StringDimensionValueUpdateRequest):
-    """Brand Dimension value 수정 입력입니다."""
+    """Brand Dimension code 또는 value 수정 입력입니다."""
 
 
 class CountryValueUpdateRequest(_StringDimensionValueUpdateRequest):
-    """Country Dimension value 수정 입력입니다."""
+    """Country Dimension code 또는 value 수정 입력입니다."""
 
 
 class CategoryValueUpdateRequest(_StringDimensionValueUpdateRequest):
-    """Category Dimension value 수정 입력입니다."""
+    """Category Dimension code 또는 value 수정 입력입니다."""
 
 
 class _StringDimensionResponse(BaseModel):
@@ -556,6 +566,7 @@ def _build_router(
                 dimension_id,
                 expected_version=expected_version,
                 value=payload.value,
+                code=payload.code,
                 reason=payload.reason,
             )
         except DimensionValidationError as error:
@@ -573,11 +584,12 @@ def _build_router(
         operation_id=f"update_{config.singular}_dimension_value",
         response_model=config.response_model,
         status_code=status.HTTP_200_OK,
-        summary=f"{config.display_name} Dimension 값 수정",
+        summary=f"{config.display_name} Dimension 코드·값 수정",
         description=(
-            f"ADMIN 또는 SUPER_ADMIN이 강한 If-Match로 {config.display_name} value만 조건부로 "
-            "수정합니다. code 입력은 허용하지 않으며, 정규화한 값이 현재 값과 같으면 "
-            "version·시각·감사 로그를 변경하지 않습니다."
+            "ADMIN 또는 SUPER_ADMIN이 직전 단건 응답의 강한 ETag를 If-Match로 제공해 "
+            f"{config.display_name} code 또는 value를 조건부로 수정합니다. code가 실제로 바뀌면 "
+            "이를 참조하는 활성·삭제 MasterCode를 같은 트랜잭션에서 재합성하며, 모든 입력이 "
+            "현재 상태와 같으면 version·시각·감사 로그를 변경하지 않습니다."
         ),
         responses=_update_responses(config.display_name),
     )
@@ -759,7 +771,7 @@ def _list_responses(name: str) -> dict[int | str, dict[str, Any]]:
         200: {"description": f"활성 {name} Dimension 목록을 반환합니다."},
         401: INVALID_ACCESS_TOKEN_RESPONSE,
         422: _validation_response(
-            description="cursor 또는 limit가 유효하지 않습니다.",
+            description="cursor 또는 limit이 유효하지 않습니다.",
             field="query.cursor",
         ),
         503: _service_unavailable_response(name),
@@ -792,6 +804,20 @@ def _get_responses(name: str) -> dict[int | str, dict[str, Any]]:
 
 
 def _update_responses(name: str) -> dict[int | str, dict[str, Any]]:
+    conflict_response = _conflict_response(name)
+    conflict_response["description"] = (
+        f"정규화된 {name} code·value 또는 재합성된 MasterCode가 이미 사용 중입니다."
+    )
+    conflict_response["content"]["application/problem+json"]["examples"]["masterCodeConflict"] = {
+        "summary": "MasterCode 재합성 충돌",
+        "value": {
+            "type": "/problems/master-code-conflict",
+            "title": "MasterCode 충돌",
+            "status": 409,
+            "detail": "같은 참조 조합 또는 합성 코드의 MasterCode가 이미 존재합니다.",
+            "code": "MASTER_CODE_CONFLICT",
+        },
+    }
     return {
         200: {
             "description": f"현재 {name} Dimension 상태를 반환합니다.",
@@ -805,17 +831,7 @@ def _update_responses(name: str) -> dict[int | str, dict[str, Any]]:
         401: INVALID_ACCESS_TOKEN_RESPONSE,
         403: AUTHORIZATION_DENIED_RESPONSE,
         404: _get_responses(name)[404],
-        409: _problem_response(
-            description=f"정규화된 {name} value가 이미 사용 중입니다.",
-            example={
-                "type": "/problems/dimension-value-conflict",
-                "title": "Dimension 값 충돌",
-                "status": 409,
-                "detail": f"정규화된 {name} 값이 이미 사용 중입니다.",
-                "code": "DIMENSION_VALUE_CONFLICT",
-                "violations": [{"field": "body.value", "message": "이미 사용 중인 값입니다."}],
-            },
-        ),
+        409: conflict_response,
         422: _validation_response(
             description=f"{name} 수정 입력값이 유효하지 않습니다.", field="body.value"
         ),

@@ -35,7 +35,21 @@ from mdm.domain.dimensions import (
 )
 from mdm.domain.master_codes import MasterCodeDimensions
 from mdm.infrastructure.database import create_engine, create_session_factory
+from mdm.infrastructure.repositories import companies as company_repository_module
+from mdm.infrastructure.repositories import string_dimensions as string_repository_module
+from mdm.infrastructure.repositories.companies import SqlAlchemyCompanyRepository
 from mdm.infrastructure.repositories.master_codes import SqlAlchemyMasterCodeRepository
+from mdm.infrastructure.repositories.memory_dimensions import SqlAlchemyMemoryRepository
+from mdm.infrastructure.repositories.numeric_dimensions import (
+    SqlAlchemyNetworkRepository,
+    SqlAlchemyYearRepository,
+)
+from mdm.infrastructure.repositories.string_dimensions import (
+    SqlAlchemyBrandRepository,
+    SqlAlchemyCategoryRepository,
+    SqlAlchemyCountryRepository,
+    SqlAlchemyModelRepository,
+)
 from mdm.infrastructure.settings import Settings
 from mdm.infrastructure.uuid7 import Uuid7Generator
 
@@ -72,6 +86,15 @@ def _audit(*, inline: bool):
     )
 
 
+def _recompose_audit():
+    return HumanMutationAuditFactory(change_set_ids=Uuid7Generator().new).create(
+        HumanPrincipal(user_id=ACTOR_ID, role=UserRole.ADMIN),
+        dimension_operation=DimensionOperation.UPDATE,
+        master_code_operation=MasterCodeOperation.RECOMPOSE,
+        reason="대표 코드 수정",
+    )
+
+
 def _all_not_applicable() -> MasterCodeCreatePlan:
     return MasterCodeCreatePlan(
         company=NotApplicable(),
@@ -103,6 +126,19 @@ def _all_inline() -> MasterCodeCreatePlan:
 def _company_only(code: str, value: str) -> MasterCodeCreatePlan:
     return MasterCodeCreatePlan(
         company=InlineDimension(DimensionCode(code), CompanyValue(value)),
+        brand=NotApplicable(),
+        model=NotApplicable(),
+        category=NotApplicable(),
+        year=NotApplicable(),
+        memory=NotApplicable(),
+        network=NotApplicable(),
+        country=NotApplicable(),
+    )
+
+
+def _company_reference_plan(company_id: UUID) -> MasterCodeCreatePlan:
+    return MasterCodeCreatePlan(
+        company=ExistingDimension(company_id),
         brand=NotApplicable(),
         model=NotApplicable(),
         category=NotApplicable(),
@@ -243,6 +279,359 @@ async def test_zero_through_eight_dimension_references_round_trip(
         fetched = await repository.get_active(created.id)
         assert sum(item is not None for item in fetched.dimensions.ordered()) == count
         assert fetched == created
+
+
+@pytest.mark.integration
+async def test_each_dimension_code_update_recomposes_the_same_master_code_in_order(
+    master_code_engine: AsyncEngine,
+) -> None:
+    sessions = create_session_factory(master_code_engine)
+    master_repository = SqlAlchemyMasterCodeRepository(sessions)
+    created = await master_repository.create(_all_inline(), _audit(inline=True))
+    dimensions = dict(zip(MasterCodeDimensions.ORDER, created.dimensions.ordered(), strict=True))
+    repositories = {
+        "company": SqlAlchemyCompanyRepository(sessions),
+        "brand": SqlAlchemyBrandRepository(sessions),
+        "model": SqlAlchemyModelRepository(sessions),
+        "category": SqlAlchemyCategoryRepository(sessions),
+        "year": SqlAlchemyYearRepository(sessions),
+        "memory": SqlAlchemyMemoryRepository(sessions),
+        "network": SqlAlchemyNetworkRepository(sessions),
+        "country": SqlAlchemyCountryRepository(sessions),
+    }
+    new_codes = {
+        "company": "COM2",
+        "brand": "BRA2",
+        "model": "MOD2",
+        "category": "CAT2",
+        "year": "YR2027",
+        "memory": "MEM256",
+        "network": "NET4",
+        "country": "USA",
+    }
+
+    for expected_version, slot in enumerate(MasterCodeDimensions.ORDER, start=2):
+        dimension = dimensions[slot]
+        assert dimension is not None
+        await repositories[slot].update_value(
+            dimension.id,
+            1,
+            None,
+            _recompose_audit(),
+            code=DimensionCode(new_codes[slot]),
+        )
+        current = await master_repository.get_active(created.id)
+        assert current.version == expected_version
+
+    final = await master_repository.get_active(created.id)
+    assert final.code == "COM2-BRA2-MOD2-CAT2-YR2027-MEM256-NET4-USA"
+    async with master_code_engine.connect() as connection:
+        operations = (
+            (
+                await connection.execute(
+                    text(
+                        "SELECT operation FROM master_code_logs "
+                        "WHERE master_code_id = :id ORDER BY master_code_version"
+                    ),
+                    {"id": created.id},
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert operations == ["CREATE", *("RECOMPOSE" for _ in range(8))]
+
+
+@pytest.mark.integration
+async def test_concurrent_different_dimension_code_updates_keep_both_new_codes(
+    master_code_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = create_session_factory(master_code_engine)
+    master_repository = SqlAlchemyMasterCodeRepository(sessions)
+    created = await master_repository.create(_all_inline(), _audit(inline=True))
+    company = created.dimensions.company
+    brand = created.dimensions.brand
+    assert company is not None and brand is not None
+    second = await master_repository.create(
+        MasterCodeCreatePlan(
+            company=ExistingDimension(company.id),
+            brand=ExistingDimension(brand.id),
+            model=NotApplicable(),
+            category=NotApplicable(),
+            year=NotApplicable(),
+            memory=NotApplicable(),
+            network=NotApplicable(),
+            country=NotApplicable(),
+        ),
+        _audit(inline=False),
+    )
+    company_locked = asyncio.Event()
+    release_company = asyncio.Event()
+    brand_attempting_lock = asyncio.Event()
+    lock_orders: dict[str, tuple[UUID, ...]] = {}
+    original_company_lock = company_repository_module.lock_referencing_master_codes
+    original_brand_lock = string_repository_module.lock_referencing_master_codes
+
+    async def hold_company_master_code_locks(*args, **kwargs):
+        locked = await original_company_lock(*args, **kwargs)
+        lock_orders["company"] = tuple(item.record.id for item in locked)
+        company_locked.set()
+        await release_company.wait()
+        return locked
+
+    async def observe_brand_master_code_lock_attempt(*args, **kwargs):
+        brand_attempting_lock.set()
+        locked = await original_brand_lock(*args, **kwargs)
+        lock_orders["brand"] = tuple(item.record.id for item in locked)
+        return locked
+
+    monkeypatch.setattr(
+        company_repository_module,
+        "lock_referencing_master_codes",
+        hold_company_master_code_locks,
+    )
+    monkeypatch.setattr(
+        string_repository_module,
+        "lock_referencing_master_codes",
+        observe_brand_master_code_lock_attempt,
+    )
+
+    company_task = asyncio.create_task(
+        SqlAlchemyCompanyRepository(sessions).update_value(
+            company.id,
+            1,
+            None,
+            _recompose_audit(),
+            code=DimensionCode("COM2"),
+        )
+    )
+    await asyncio.wait_for(company_locked.wait(), timeout=5)
+    brand_task = asyncio.create_task(
+        SqlAlchemyBrandRepository(sessions).update_value(
+            brand.id,
+            1,
+            None,
+            _recompose_audit(),
+            code=DimensionCode("BRA2"),
+        )
+    )
+    await asyncio.wait_for(brand_attempting_lock.wait(), timeout=5)
+    try:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(brand_task), timeout=0.1)
+    finally:
+        release_company.set()
+    results = await asyncio.gather(company_task, brand_task)
+
+    assert all(result.version == 2 for result in results)
+    expected_lock_order = tuple(sorted((created.id, second.id)))
+    assert lock_orders == {
+        "company": expected_lock_order,
+        "brand": expected_lock_order,
+    }
+    recomposed = await master_repository.get_active(created.id)
+    assert recomposed.code == "COM2-BRA2-MOD-CAT-YR2026-MEM128-NET5-KOR"
+    assert recomposed.version == 3
+    recomposed_second = await master_repository.get_active(second.id)
+    assert recomposed_second.code == "COM2-BRA2-NNN-NNN-NNN-NNN-NNN-NNN"
+    assert recomposed_second.version == 3
+
+
+@pytest.mark.integration
+async def test_master_code_create_racing_with_dimension_code_update_never_keeps_old_code(
+    master_code_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = create_session_factory(master_code_engine)
+    company_repository = SqlAlchemyCompanyRepository(sessions)
+    company = await company_repository.create(
+        DimensionCode("COM"), CompanyValue("company"), _audit(inline=True)
+    )
+    master_repository = SqlAlchemyMasterCodeRepository(sessions)
+    reference_locked = asyncio.Event()
+    release_create = asyncio.Event()
+    update_started = asyncio.Event()
+    original_lock_reference = master_repository._lock_reference
+
+    async def hold_reference_lock(session, slot, dimension_id):
+        dimension = await original_lock_reference(session, slot, dimension_id)
+        reference_locked.set()
+        await release_create.wait()
+        return dimension
+
+    monkeypatch.setattr(master_repository, "_lock_reference", hold_reference_lock)
+    create_task = asyncio.create_task(
+        master_repository.create(_company_reference_plan(company.id), _audit(inline=False))
+    )
+    await asyncio.wait_for(reference_locked.wait(), timeout=5)
+
+    async def update_company():
+        update_started.set()
+        return await company_repository.update_value(
+            company.id,
+            1,
+            None,
+            _recompose_audit(),
+            code=DimensionCode("COM2"),
+        )
+
+    update_task = asyncio.create_task(update_company())
+    await asyncio.wait_for(update_started.wait(), timeout=5)
+    try:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(update_task), timeout=0.1)
+    finally:
+        release_create.set()
+    created, updated = await asyncio.gather(create_task, update_task)
+
+    assert updated.code == DimensionCode("COM2")
+    persisted = await master_repository.get_active(created.id)
+    assert persisted.code == "COM2-NNN-NNN-NNN-NNN-NNN-NNN-NNN"
+
+
+@pytest.mark.integration
+async def test_code_update_recomposes_active_and_deleted_master_codes(
+    master_code_engine: AsyncEngine,
+) -> None:
+    sessions = create_session_factory(master_code_engine)
+    master_repository = SqlAlchemyMasterCodeRepository(sessions)
+    active = await master_repository.create(_all_inline(), _audit(inline=True))
+    company = active.dimensions.company
+    assert company is not None
+    tombstone = await master_repository.create(
+        _company_reference_plan(company.id), _audit(inline=False)
+    )
+    unaffected = await master_repository.create(_all_not_applicable(), _audit(inline=False))
+    async with master_code_engine.begin() as connection:
+        await connection.execute(text("ALTER TABLE master_codes DISABLE TRIGGER USER"))
+        await connection.execute(
+            text("UPDATE master_codes SET deleted_at = updated_at WHERE id = :id"),
+            {"id": tombstone.id},
+        )
+        await connection.execute(text("ALTER TABLE master_codes ENABLE TRIGGER USER"))
+
+    updated = await SqlAlchemyCompanyRepository(sessions).update_value(
+        company.id,
+        1,
+        None,
+        _recompose_audit(),
+        code=DimensionCode("COM2"),
+    )
+
+    assert updated.code == DimensionCode("COM2")
+    async with master_code_engine.connect() as connection:
+        rows = (
+            (
+                await connection.execute(
+                    text(
+                        "SELECT id, code, version, deleted_at FROM master_codes "
+                        "WHERE id IN (:active_id, :deleted_id) ORDER BY id"
+                    ),
+                    {"active_id": active.id, "deleted_id": tombstone.id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        recompose_logs = await connection.scalar(
+            text("SELECT count(*) FROM master_code_logs WHERE operation = 'RECOMPOSE'")
+        )
+
+    assert len(rows) == 2
+    assert all(row["code"].startswith("COM2-") for row in rows)
+    assert all(row["version"] == 2 for row in rows)
+    assert sum(row["deleted_at"] is not None for row in rows) == 1
+    assert recompose_logs == 2
+    assert await master_repository.get_active(unaffected.id) == unaffected
+
+
+@pytest.mark.integration
+async def test_recompose_log_failure_rolls_back_dimension_and_all_master_codes(
+    master_code_engine: AsyncEngine,
+) -> None:
+    sessions = create_session_factory(master_code_engine)
+    master_repository = SqlAlchemyMasterCodeRepository(sessions)
+    created = await master_repository.create(_all_inline(), _audit(inline=True))
+    company = created.dimensions.company
+    assert company is not None
+    async with master_code_engine.begin() as connection:
+        await connection.execute(
+            text(
+                "CREATE FUNCTION reject_recompose_log() RETURNS trigger LANGUAGE plpgsql "
+                "AS 'BEGIN IF NEW.operation = ''RECOMPOSE'' THEN "
+                "RAISE EXCEPTION ''forced recompose log failure''; END IF; RETURN NEW; END'"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE TRIGGER reject_recompose_log BEFORE INSERT ON master_code_logs "
+                "FOR EACH ROW EXECUTE FUNCTION reject_recompose_log()"
+            )
+        )
+    try:
+        with pytest.raises(DBAPIError):
+            await SqlAlchemyCompanyRepository(sessions).update_value(
+                company.id,
+                1,
+                None,
+                _recompose_audit(),
+                code=DimensionCode("COM2"),
+            )
+    finally:
+        async with master_code_engine.begin() as connection:
+            await connection.execute(text("DROP TRIGGER reject_recompose_log ON master_code_logs"))
+            await connection.execute(text("DROP FUNCTION reject_recompose_log()"))
+
+    persisted_company = await SqlAlchemyCompanyRepository(sessions).get_active(company.id)
+    persisted_master = await master_repository.get_active(created.id)
+    assert persisted_company == company
+    assert persisted_master == created
+
+
+@pytest.mark.integration
+async def test_recompose_unique_conflict_is_sanitized_and_rolls_back(
+    master_code_engine: AsyncEngine,
+) -> None:
+    sessions = create_session_factory(master_code_engine)
+    master_repository = SqlAlchemyMasterCodeRepository(sessions)
+    created = await master_repository.create(_all_inline(), _audit(inline=True))
+    company = created.dimensions.company
+    assert company is not None
+    async with master_code_engine.begin() as connection:
+        await connection.execute(
+            text(
+                "CREATE FUNCTION force_recompose_conflict() RETURNS trigger LANGUAGE plpgsql "
+                "AS 'BEGIN RAISE unique_violation USING "
+                "CONSTRAINT = ''uq_master_codes_code''; END'"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE TRIGGER a_force_recompose_conflict BEFORE UPDATE ON master_codes "
+                "FOR EACH ROW EXECUTE FUNCTION force_recompose_conflict()"
+            )
+        )
+    try:
+        with pytest.raises(MasterCodeConflict):
+            await SqlAlchemyCompanyRepository(sessions).update_value(
+                company.id,
+                1,
+                None,
+                _recompose_audit(),
+                code=DimensionCode("COM2"),
+            )
+    finally:
+        async with master_code_engine.begin() as connection:
+            await connection.execute(
+                text("DROP TRIGGER a_force_recompose_conflict ON master_codes")
+            )
+            await connection.execute(text("DROP FUNCTION force_recompose_conflict()"))
+
+    persisted_company = await SqlAlchemyCompanyRepository(sessions).get_active(company.id)
+    persisted_master = await master_repository.get_active(created.id)
+    assert persisted_company == company
+    assert persisted_master == created
 
 
 @pytest.mark.integration

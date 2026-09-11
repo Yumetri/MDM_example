@@ -8,7 +8,12 @@ from uuid import UUID
 from mdm.application.audit import HumanMutationAuditFactory
 from mdm.application.auth import HumanPrincipal
 from mdm.application.authorization import AuthorizationAction, AuthorizationPolicy
-from mdm.domain.audit import AuditInvariantError, DimensionOperation, MutationAuditMetadata
+from mdm.domain.audit import (
+    AuditInvariantError,
+    DimensionOperation,
+    MasterCodeOperation,
+    MutationAuditMetadata,
+)
 from mdm.domain.dimensions import (
     CompanyValue,
     Dimension,
@@ -88,10 +93,12 @@ class CompanyRepository(Protocol):
         self,
         company_id: UUID,
         expected_version: int,
-        value: CompanyValue,
+        value: CompanyValue | None,
         audit: MutationAuditMetadata,
+        *,
+        code: DimensionCode | None = None,
     ) -> Dimension[CompanyValue]:
-        """Conditionally replace one active Company's value."""
+        """Conditionally replace one active Company's code and/or value."""
         ...
 
 
@@ -151,17 +158,24 @@ class UpdateCompanyValue:
         company_id: UUID,
         *,
         expected_version: int,
-        value: str,
-        reason: str | None,
+        value: str | None = None,
+        code: str | None = None,
+        reason: str | None = None,
     ) -> Dimension[CompanyValue]:
         self._authorization.authorize(principal, AuthorizationAction.MUTATE_DATA)
         if type(expected_version) is not int or expected_version < 1:
             raise ValueError("expected version must be a positive integer")
-        normalized_value = CompanyValue(value)
+        if code is None and value is None:
+            raise ValueError("code or value is required")
+        normalized_code = None if code is None else DimensionCode(code)
+        normalized_value = None if value is None else CompanyValue(value)
         try:
             audit = self._audit_factory.create(
                 principal,
                 dimension_operation=DimensionOperation.UPDATE,
+                master_code_operation=(
+                    MasterCodeOperation.RECOMPOSE if normalized_code is not None else None
+                ),
                 reason=reason,
             )
         except AuditInvariantError as error:
@@ -169,7 +183,11 @@ class UpdateCompanyValue:
                 "reason", "유효한 변경 사유를 입력해야 합니다."
             ) from error
         return await self._repository.update_value(
-            company_id, expected_version, normalized_value, audit
+            company_id,
+            expected_version,
+            normalized_value,
+            audit,
+            code=normalized_code,
         )
 
 
