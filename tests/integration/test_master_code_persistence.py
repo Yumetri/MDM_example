@@ -17,8 +17,10 @@ from mdm.application.master_codes import (
     MasterCodeConflict,
     MasterCodeCreatePlan,
     MasterCodeCursor,
+    MasterCodeReferenceUpdate,
     NotApplicable,
 )
+from mdm.application.preconditions import PreconditionFailed
 from mdm.domain.audit import DimensionOperation, MasterCodeOperation
 from mdm.domain.auth import UserRole
 from mdm.domain.dimensions import (
@@ -95,6 +97,14 @@ def _recompose_audit():
     )
 
 
+def _reference_update_audit():
+    return HumanMutationAuditFactory(change_set_ids=Uuid7Generator().new).create(
+        HumanPrincipal(user_id=ACTOR_ID, role=UserRole.ADMIN),
+        master_code_operation=MasterCodeOperation.REFERENCE_UPDATE,
+        reason="참조 정정",
+    )
+
+
 def _all_not_applicable() -> MasterCodeCreatePlan:
     return MasterCodeCreatePlan(
         company=NotApplicable(),
@@ -147,6 +157,199 @@ def _company_reference_plan(company_id: UUID) -> MasterCodeCreatePlan:
         network=NotApplicable(),
         country=NotApplicable(),
     )
+
+
+@pytest.mark.integration
+async def test_reference_update_replaces_and_clears_slots_with_one_audit_log(
+    master_code_engine: AsyncEngine,
+) -> None:
+    repository = SqlAlchemyMasterCodeRepository(create_session_factory(master_code_engine))
+    created = await repository.create(_all_inline(), _audit(inline=True))
+    replacement_owner = await repository.create(
+        _company_only("ALT", "alternate"),
+        _audit(inline=True),
+    )
+    replacement_company_id = replacement_owner.dimensions.company.id  # type: ignore[union-attr]
+    brand_id = created.dimensions.brand.id  # type: ignore[union-attr]
+    original_updated_at = created.updated_at
+
+    changed = await repository.update_references(
+        created.id,
+        MasterCodeReferenceUpdate(
+            company=ExistingDimension(replacement_company_id),
+            brand=ExistingDimension(brand_id),
+            country=NotApplicable(),
+        ),
+        created.etag(),
+        _reference_update_audit(),
+    )
+
+    assert changed.dimensions.company is not None
+    assert changed.dimensions.company.id == replacement_company_id
+    assert changed.dimensions.brand is not None
+    assert changed.dimensions.brand.id == brand_id
+    assert changed.dimensions.country is None
+    assert changed.code == "ALT-BRA-MOD-CAT-YR2026-MEM128-NET5-NNN"
+    assert changed.version == 2
+    assert changed.updated_at > original_updated_at
+    async with master_code_engine.connect() as connection:
+        logs = (
+            (
+                await connection.execute(
+                    text(
+                        "SELECT operation, master_code_version, old_state, new_state, reason "
+                        "FROM master_code_logs WHERE master_code_id = :id "
+                        "ORDER BY master_code_version"
+                    ),
+                    {"id": created.id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+    assert [row["operation"] for row in logs] == ["CREATE", "REFERENCE_UPDATE"]
+    assert logs[1]["master_code_version"] == 2
+    assert logs[1]["old_state"]["company_id"] == str(created.dimensions.company.id)  # type: ignore[union-attr]
+    assert logs[1]["new_state"]["company_id"] == str(replacement_company_id)
+    assert logs[1]["reason"] == "참조 정정"
+
+
+@pytest.mark.integration
+async def test_reference_update_noop_and_stale_etag_write_nothing(
+    master_code_engine: AsyncEngine,
+) -> None:
+    repository = SqlAlchemyMasterCodeRepository(create_session_factory(master_code_engine))
+    created = await repository.create(_all_inline(), _audit(inline=True))
+    company_id = created.dimensions.company.id  # type: ignore[union-attr]
+
+    noop = await repository.update_references(
+        created.id,
+        MasterCodeReferenceUpdate(company=ExistingDimension(company_id)),
+        created.etag(),
+        _reference_update_audit(),
+    )
+    with pytest.raises(PreconditionFailed):
+        await repository.update_references(
+            created.id,
+            MasterCodeReferenceUpdate(company=NotApplicable()),
+            '"mc-1-' + "0" * 64 + '"',
+            _reference_update_audit(),
+        )
+
+    fetched = await repository.get_active(created.id)
+    assert noop == fetched == created
+    async with master_code_engine.connect() as connection:
+        log_count = await connection.scalar(
+            text("SELECT count(*) FROM master_code_logs WHERE master_code_id = :id"),
+            {"id": created.id},
+        )
+    assert log_count == 1
+
+
+@pytest.mark.integration
+async def test_reference_update_reports_all_invalid_or_wrong_type_fields(
+    master_code_engine: AsyncEngine,
+) -> None:
+    repository = SqlAlchemyMasterCodeRepository(create_session_factory(master_code_engine))
+    created = await repository.create(_all_inline(), _audit(inline=True))
+    deleted_reference_owner = await repository.create(
+        _company_only("ALT", "alternate"),
+        _audit(inline=True),
+    )
+    company_id = created.dimensions.company.id  # type: ignore[union-attr]
+    deleted_company_id = deleted_reference_owner.dimensions.company.id  # type: ignore[union-attr]
+    missing_id = UUID("01890f7c-8abc-7def-8abc-999999999999")
+    async with master_code_engine.begin() as connection:
+        await connection.execute(text("ALTER TABLE dimension_companies DISABLE TRIGGER USER"))
+        await connection.execute(
+            text("UPDATE dimension_companies SET deleted_at = updated_at WHERE id = :id"),
+            {"id": deleted_company_id},
+        )
+        await connection.execute(text("ALTER TABLE dimension_companies ENABLE TRIGGER USER"))
+
+    with pytest.raises(InvalidDimensionReference) as raised:
+        await repository.update_references(
+            created.id,
+            MasterCodeReferenceUpdate(
+                company=ExistingDimension(deleted_company_id),
+                brand=ExistingDimension(company_id),
+                country=ExistingDimension(missing_id),
+            ),
+            created.etag(),
+            _reference_update_audit(),
+        )
+
+    assert raised.value.fields == (
+        "dimensions.company.id",
+        "dimensions.brand.id",
+        "dimensions.country.id",
+    )
+    assert await repository.get_active(created.id) == created
+
+
+@pytest.mark.integration
+async def test_reference_update_unique_conflict_rolls_back_state_and_log(
+    master_code_engine: AsyncEngine,
+) -> None:
+    repository = SqlAlchemyMasterCodeRepository(create_session_factory(master_code_engine))
+    created = await repository.create(_all_inline(), _audit(inline=True))
+    await repository.create(_all_not_applicable(), _audit(inline=False))
+    clear_all = MasterCodeReferenceUpdate(
+        **{slot: NotApplicable() for slot in MasterCodeDimensions.ORDER}
+    )
+
+    with pytest.raises(MasterCodeConflict):
+        await repository.update_references(
+            created.id,
+            clear_all,
+            created.etag(),
+            _reference_update_audit(),
+        )
+
+    assert await repository.get_active(created.id) == created
+    async with master_code_engine.connect() as connection:
+        log_count = await connection.scalar(
+            text("SELECT count(*) FROM master_code_logs WHERE master_code_id = :id"),
+            {"id": created.id},
+        )
+    assert log_count == 1
+
+
+@pytest.mark.integration
+async def test_concurrent_reference_updates_with_same_etag_have_one_winner(
+    master_code_engine: AsyncEngine,
+) -> None:
+    sessions = create_session_factory(master_code_engine)
+    repository = SqlAlchemyMasterCodeRepository(sessions)
+    created = await repository.create(_all_inline(), _audit(inline=True))
+
+    results = await asyncio.gather(
+        SqlAlchemyMasterCodeRepository(sessions).update_references(
+            created.id,
+            MasterCodeReferenceUpdate(company=NotApplicable()),
+            created.etag(),
+            _reference_update_audit(),
+        ),
+        SqlAlchemyMasterCodeRepository(sessions).update_references(
+            created.id,
+            MasterCodeReferenceUpdate(brand=NotApplicable()),
+            created.etag(),
+            _reference_update_audit(),
+        ),
+        return_exceptions=True,
+    )
+
+    assert sum(not isinstance(result, BaseException) for result in results) == 1
+    assert sum(isinstance(result, PreconditionFailed) for result in results) == 1, repr(results)
+    fetched = await repository.get_active(created.id)
+    assert fetched.version == 2
+    assert (fetched.dimensions.company is None) != (fetched.dimensions.brand is None)
+    async with master_code_engine.connect() as connection:
+        log_count = await connection.scalar(
+            text("SELECT count(*) FROM master_code_logs WHERE master_code_id = :id"),
+            {"id": created.id},
+        )
+    assert log_count == 2
 
 
 @pytest.mark.integration

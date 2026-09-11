@@ -2,13 +2,15 @@
 
 import base64
 import json
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, Path, Query, Response, status
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from fastapi import APIRouter, Body, Depends, Header, Path, Query, Request, Response, status
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from mdm.api.auth import INVALID_ACCESS_TOKEN_RESPONSE
 from mdm.api.authorization import AUTHORIZATION_DENIED_RESPONSE, build_authorization_guard
@@ -25,9 +27,13 @@ from mdm.application.master_codes import (
     MasterCodeCreateInput,
     MasterCodeCursor,
     MasterCodePage,
+    MasterCodeReferenceUpdate,
     MemoryCreateValue,
     NotApplicable,
+    ReferenceSelection,
+    UpdateMasterCodeReferences,
 )
+from mdm.application.preconditions import InvalidIfMatch, PreconditionRequired
 from mdm.domain.dimensions import (
     DimensionValidationError,
     MemoryValue,
@@ -41,6 +47,21 @@ CURSOR_EXAMPLE = (
     "IjIwMjYtMDktMTBUMDE6MjM6NDVaIiwidiI6MX0"
 )
 ETAG_EXAMPLE = '"mc-1-f04134011a34cd1149678cf333ea35d4ed19223e32a9d4c6fe6fa5cdfe2aad1d"'
+_MASTER_CODE_ETAG = re.compile(r'^"mc-([1-9][0-9]*)-([0-9a-f]{64})"$', re.ASCII)
+
+MasterCodeIfMatchHeader = Annotated[
+    str,
+    Header(
+        alias="If-Match",
+        description=(
+            "직전 MasterCode 단건 응답에서 받은, MasterCode와 여덟 자리의 현재 Dimension "
+            "상태를 함께 반영한 강한 ETag입니다. 따옴표를 포함해 문서에 제시된 정확한 형식의 "
+            "값 하나만 허용합니다."
+        ),
+        examples=[ETAG_EXAMPLE],
+        json_schema_extra={"pattern": r'^"mc-[1-9][0-9]*-[0-9a-f]{64}"$'},
+    ),
+]
 
 MASTER_CODE_CREATE_EXAMPLE: dict[str, Any] = {
     "dimensions": {
@@ -307,6 +328,89 @@ class MasterCodeCreateRequest(BaseModel):
     ] = None
 
 
+ReferenceUpdateSelectionInput = Annotated[
+    ReferenceInput | NotApplicableInput,
+    Field(discriminator="mode"),
+]
+
+
+class MasterCodeReferenceUpdatesInput(BaseModel):
+    """변경할 MasterCode Dimension 자리만 포함하는 부분 입력입니다."""
+
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"minProperties": 1})
+    company: Annotated[
+        ReferenceUpdateSelectionInput | SkipJsonSchema[None],
+        Field(description="변경할 Company 참조이며 생략하면 현재 참조를 유지합니다."),
+    ] = None
+    brand: Annotated[
+        ReferenceUpdateSelectionInput | SkipJsonSchema[None],
+        Field(description="변경할 Brand 참조이며 생략하면 현재 참조를 유지합니다."),
+    ] = None
+    model: Annotated[
+        ReferenceUpdateSelectionInput | SkipJsonSchema[None],
+        Field(description="변경할 Model 참조이며 생략하면 현재 참조를 유지합니다."),
+    ] = None
+    category: Annotated[
+        ReferenceUpdateSelectionInput | SkipJsonSchema[None],
+        Field(description="변경할 Category 참조이며 생략하면 현재 참조를 유지합니다."),
+    ] = None
+    year: Annotated[
+        ReferenceUpdateSelectionInput | SkipJsonSchema[None],
+        Field(description="변경할 Year 참조이며 생략하면 현재 참조를 유지합니다."),
+    ] = None
+    memory: Annotated[
+        ReferenceUpdateSelectionInput | SkipJsonSchema[None],
+        Field(description="변경할 Memory 참조이며 생략하면 현재 참조를 유지합니다."),
+    ] = None
+    network: Annotated[
+        ReferenceUpdateSelectionInput | SkipJsonSchema[None],
+        Field(description="변경할 Network 참조이며 생략하면 현재 참조를 유지합니다."),
+    ] = None
+    country: Annotated[
+        ReferenceUpdateSelectionInput | SkipJsonSchema[None],
+        Field(description="변경할 Country 참조이며 생략하면 현재 참조를 유지합니다."),
+    ] = None
+
+    @model_validator(mode="after")
+    def require_one_non_null_change(self) -> "MasterCodeReferenceUpdatesInput":
+        if not self.model_fields_set or any(
+            getattr(self, slot) is None for slot in self.model_fields_set
+        ):
+            raise ValueError("하나 이상의 REFERENCE 또는 NOT_APPLICABLE 자리를 입력해야 합니다.")
+        return self
+
+
+class MasterCodeReferenceUpdateRequest(BaseModel):
+    """관리자 직접 MasterCode 참조 수정 입력입니다."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "example": {
+                "dimensions": {
+                    "brand": {
+                        "mode": "REFERENCE",
+                        "id": "01a088e9-e4e8-7000-8000-000000000002",
+                    },
+                    "country": {"mode": "NOT_APPLICABLE"},
+                },
+                "reason": "잘못 연결된 참조 정정",
+            }
+        },
+    )
+    dimensions: Annotated[
+        MasterCodeReferenceUpdatesInput,
+        Field(description="변경할 자리만 입력하며 생략한 자리는 현재 참조를 유지합니다."),
+    ]
+    reason: Annotated[
+        StrictStr | None,
+        Field(
+            description="참조 수정 이유이며 앞뒤 일반 공백을 제거한 결과가 500자 이하여야 합니다.",
+            json_schema_extra={"x-normalized-maxLength": 500},
+        ),
+    ] = None
+
+
 class StringDimensionReferenceResponse(BaseModel):
     """현재 문자열 Dimension 표현입니다."""
 
@@ -447,6 +551,7 @@ def build_master_code_router(
     create_master_code: CreateMasterCode,
     get_master_code: GetMasterCode,
     list_master_codes: ListMasterCodes,
+    update_master_code_references: UpdateMasterCodeReferences,
     principal_dependency: Callable[..., HumanPrincipal],
     authorization: AuthorizationPolicy,
 ) -> APIRouter:
@@ -545,6 +650,57 @@ def build_master_code_router(
         page = await list_master_codes.execute(principal, after=after, limit=limit)
         return _page_response(page)
 
+    @router.patch(
+        "/{master_code_id}",
+        operation_id="update_master_code_references",
+        response_model=MasterCodeResponse,
+        status_code=status.HTTP_200_OK,
+        summary="MasterCode Dimension 참조 수정",
+        description=(
+            "ADMIN 또는 SUPER_ADMIN이 직전 단건 응답에서 받은, MasterCode와 현재 참조 "
+            "Dimension 상태를 함께 반영한 강한 ETag를 If-Match로 제공해 하나 이상의 Dimension "
+            "참조를 교체하거나 NOT_APPLICABLE로 해제합니다. 생략한 자리는 유지하며 최종 참조가 "
+            "현재와 같으면 version·시각·감사 로그를 변경하지 않습니다."
+        ),
+        responses={
+            200: _etag_response("수정 후 현재 MasterCode 상태를 반환합니다."),
+            400: _master_code_precondition_response(400),
+            401: INVALID_ACCESS_TOKEN_RESPONSE,
+            403: AUTHORIZATION_DENIED_RESPONSE,
+            404: _not_found_response(),
+            409: _reference_update_conflict_response(),
+            412: _master_code_precondition_response(412),
+            422: _reference_update_validation_response(),
+            428: _master_code_precondition_response(428),
+            503: _service_unavailable_response(
+                "/api/v1/master-codes/01890f7c-8abc-7def-8abc-222222222222"
+            ),
+        },
+    )
+    async def update_master_code_references_route(
+        master_code_id: Annotated[UUID, Path(description="수정할 MasterCode UUID입니다.")],
+        payload: MasterCodeReferenceUpdateRequest,
+        request: Request,
+        response: Response,
+        principal: Annotated[HumanPrincipal, Depends(mutation_guard)],
+        if_match: MasterCodeIfMatchHeader,
+    ) -> MasterCodeResponse:
+        del if_match
+        expected_etag = _parse_master_code_if_match_values(request.headers.getlist("if-match"))
+        changes = _reference_update_input(payload.dimensions)
+        try:
+            master_code = await update_master_code_references.execute(
+                principal,
+                master_code_id=master_code_id,
+                changes=changes,
+                expected_etag=expected_etag,
+                reason=payload.reason,
+            )
+        except DimensionValidationError as error:
+            raise DimensionValidationError(f"body.{error.field}", error.message) from error
+        response.headers["ETag"] = master_code.etag()
+        return _response(master_code)
+
     @router.get(
         "/{master_code_id}",
         operation_id="get_master_code",
@@ -582,6 +738,31 @@ def _create_input(value: MasterCodeDimensionsInput) -> MasterCodeCreateInput:
     return MasterCodeCreateInput(
         **{slot: _selection(getattr(value, slot)) for slot in MasterCodeDimensions.ORDER}
     )
+
+
+def _reference_update_input(
+    value: MasterCodeReferenceUpdatesInput,
+) -> MasterCodeReferenceUpdate:
+    changes: dict[str, ReferenceSelection] = {
+        slot: _reference_selection(getattr(value, slot)) for slot in value.model_fields_set
+    }
+    return MasterCodeReferenceUpdate(**changes)
+
+
+def _reference_selection(
+    value: ReferenceInput | NotApplicableInput,
+) -> ReferenceSelection:
+    if isinstance(value, ReferenceInput):
+        return ExistingDimension(value.id)
+    return NotApplicable()
+
+
+def _parse_master_code_if_match_values(values: list[str]) -> str:
+    if not values:
+        raise PreconditionRequired
+    if len(values) != 1 or _MASTER_CODE_ETAG.fullmatch(values[0]) is None:
+        raise InvalidIfMatch
+    return values[0]
 
 
 def _selection(value: BaseModel) -> ExistingDimension | InlineDimension | NotApplicable:
@@ -697,7 +878,9 @@ def _etag_response(description: str) -> dict[str, Any]:
         },
         "headers": {
             "ETag": {
-                "description": "MasterCode와 8개 Dimension version을 포함한 강한 ETag입니다.",
+                "description": (
+                    "MasterCode와 여덟 자리의 현재 Dimension 상태를 함께 반영한 강한 ETag입니다."
+                ),
                 "schema": {
                     "type": "string",
                     "example": ETAG_EXAMPLE,
@@ -796,6 +979,81 @@ def _create_validation_response() -> dict[str, Any]:
     )
 
 
+def _reference_update_validation_response() -> dict[str, Any]:
+    return _problem_response(
+        description="참조 수정 입력 또는 기존 Dimension 참조가 유효하지 않습니다.",
+        examples={
+            "emptyChanges": {
+                "summary": "변경 자리 없음",
+                "type": "/problems/validation-error",
+                "title": "유효하지 않은 요청",
+                "status": 422,
+                "detail": "하나 이상의 요청 필드가 유효하지 않습니다.",
+                "code": "VALIDATION_ERROR",
+                "instance": ("/api/v1/master-codes/01890f7c-8abc-7def-8abc-222222222222"),
+                "violations": [
+                    {"field": "body.dimensions", "message": "하나 이상 변경해야 합니다."}
+                ],
+            },
+            "invalidDimensionReference": {
+                "summary": "없거나 비활성인 참조",
+                "type": "/problems/invalid-dimension-reference",
+                "title": "유효하지 않은 Dimension 참조",
+                "status": 422,
+                "detail": "하나 이상의 Dimension 참조가 없거나 활성 상태가 아닙니다.",
+                "code": "INVALID_DIMENSION_REFERENCE",
+                "instance": ("/api/v1/master-codes/01890f7c-8abc-7def-8abc-222222222222"),
+                "violations": [
+                    {
+                        "field": "body.dimensions.company.id",
+                        "message": "활성 Dimension을 참조해야 합니다.",
+                    }
+                ],
+            },
+        },
+    )
+
+
+def _master_code_precondition_response(status_code: int) -> dict[str, Any]:
+    responses = {
+        400: (
+            "If-Match 헤더 형식이 유효하지 않습니다.",
+            "invalid-if-match",
+            "유효하지 않은 If-Match",
+            "If-Match에는 직전 MasterCode 응답에서 받은, 문서에 제시된 형식의 강한 ETag "
+            "하나를 입력해야 합니다.",
+            "INVALID_IF_MATCH",
+        ),
+        412: (
+            "If-Match가 현재 MasterCode 표현의 ETag와 일치하지 않습니다.",
+            "precondition-failed",
+            "사전 조건 불일치",
+            "MasterCode 또는 참조 Dimension이 조회 이후 변경되었습니다. 최신 상태와 ETag를 "
+            "다시 조회해 주세요.",
+            "PRECONDITION_FAILED",
+        ),
+        428: (
+            "조건부 참조 수정에 필요한 If-Match 헤더가 없습니다.",
+            "precondition-required",
+            "사전 조건 필요",
+            "MasterCode를 변경하려면 직전 단건 응답의 ETag를 If-Match로 제공해야 합니다.",
+            "PRECONDITION_REQUIRED",
+        ),
+    }
+    description, slug, title, detail, code = responses[status_code]
+    return _problem_response(
+        description=description,
+        example={
+            "type": f"/problems/{slug}",
+            "title": title,
+            "status": status_code,
+            "detail": detail,
+            "code": code,
+            "instance": "/api/v1/master-codes/01890f7c-8abc-7def-8abc-222222222222",
+        },
+    )
+
+
 def _pagination_validation_response() -> dict[str, Any]:
     return _problem_response(
         description="cursor 또는 limit이 유효하지 않습니다.",
@@ -890,6 +1148,20 @@ def _conflict_response() -> dict[str, Any]:
                     },
                 ],
             },
+        },
+    )
+
+
+def _reference_update_conflict_response() -> dict[str, Any]:
+    return _problem_response(
+        description="변경 후 참조 조합 또는 합성 코드가 기존 MasterCode와 충돌합니다.",
+        example={
+            "type": "/problems/master-code-conflict",
+            "title": "MasterCode 충돌",
+            "status": 409,
+            "detail": "같은 참조 조합 또는 합성 코드의 MasterCode가 이미 존재합니다.",
+            "code": "MASTER_CODE_CONFLICT",
+            "instance": "/api/v1/master-codes/01890f7c-8abc-7def-8abc-222222222222",
         },
     )
 

@@ -27,9 +27,11 @@ from mdm.application.master_codes import (
     MasterCodeCursor,
     MasterCodeNotFound,
     MasterCodePage,
+    MasterCodeReferenceUpdate,
     MasterCodeRepositoryUnavailable,
     NotApplicable,
 )
+from mdm.application.preconditions import PreconditionFailed
 from mdm.domain.audit import MutationAuditMetadata
 from mdm.domain.dimensions import (
     BrandValue,
@@ -241,6 +243,140 @@ class SqlAlchemyMasterCodeRepository:
             has_more=len(rows) > limit,
         )
 
+    async def update_references(
+        self,
+        master_code_id: UUID,
+        changes: MasterCodeReferenceUpdate,
+        expected_etag: str,
+        audit: MutationAuditMetadata,
+    ) -> MasterCode:
+        try:
+            async with self._session_factory.begin() as session:
+                initial_row = (
+                    await session.execute(
+                        _joined_statement().where(
+                            MasterCodeRecord.id == master_code_id,
+                            MasterCodeRecord.deleted_at.is_(None),
+                        )
+                    )
+                ).one_or_none()
+                if initial_row is None:
+                    raise MasterCodeNotFound
+                initial = _joined_to_domain(initial_row)
+
+                locked_dimensions, invalid = await self._lock_reference_update_dimensions(
+                    session,
+                    initial,
+                    changes,
+                )
+                if invalid:
+                    raise InvalidDimensionReference(tuple(invalid))
+
+                record = await session.scalar(
+                    select(MasterCodeRecord)
+                    .where(
+                        MasterCodeRecord.id == master_code_id,
+                        MasterCodeRecord.deleted_at.is_(None),
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                if record is None or not _same_persisted_state(record, initial):
+                    raise PreconditionFailed
+
+                current_dimensions = MasterCodeDimensions(
+                    **{
+                        slot: (
+                            None
+                            if (dimension_id := getattr(record, f"{slot}_id")) is None
+                            else locked_dimensions[slot][dimension_id]
+                        )
+                        for slot in MasterCodeDimensions.ORDER
+                    }
+                )
+                current = _master_code(record, current_dimensions)
+                if current.etag() != expected_etag:
+                    raise PreconditionFailed
+
+                resolved = {
+                    slot: _resolve_reference_update_slot(
+                        current=getattr(current_dimensions, slot),
+                        change=getattr(changes, slot),
+                        locked=locked_dimensions[slot],
+                    )
+                    for slot in MasterCodeDimensions.ORDER
+                }
+                next_dimensions = MasterCodeDimensions(**resolved)
+                if _dimension_ids(next_dimensions) == _dimension_ids(current_dimensions):
+                    return current
+
+                mutation_timestamp = await SqlAlchemyMutationAuditContextWriter(
+                    session
+                ).set_context(audit, minimum_timestamp=current.updated_at)
+                updated = current.update_references(
+                    dimensions=next_dimensions,
+                    changed_at=mutation_timestamp,
+                )
+                for slot, dimension in resolved.items():
+                    setattr(record, f"{slot}_id", None if dimension is None else dimension.id)
+                record.code = updated.code
+                record.version = updated.version
+                record.updated_at = updated.updated_at
+                await session.flush()
+                return updated
+        except IntegrityError as error:
+            if _constraint_name(error) in {
+                "uq_master_codes_code",
+                "uq_master_codes_references",
+            }:
+                raise MasterCodeConflict from None
+            raise
+        except MutationAuditContextUnavailable:
+            raise MasterCodeRepositoryUnavailable from None
+        except SQLAlchemyError as error:
+            _raise_if_temporarily_unavailable(error)
+            raise
+
+    async def _lock_reference_update_dimensions(
+        self,
+        session: AsyncSession,
+        initial: MasterCode,
+        changes: MasterCodeReferenceUpdate,
+    ) -> tuple[dict[str, dict[UUID, MasterCodeDimension]], list[str]]:
+        locked: dict[str, dict[UUID, MasterCodeDimension]] = {}
+        invalid: list[str] = []
+        for slot in MasterCodeDimensions.ORDER:
+            current = getattr(initial.dimensions, slot)
+            change = getattr(changes, slot)
+            identifiers = {
+                dimension.id
+                for dimension in (current, change)
+                if isinstance(dimension, (Dimension, ExistingDimension))
+            }
+            if identifiers:
+                config = _SLOTS[slot]
+                records = (
+                    await session.scalars(
+                        select(config.record_type)
+                        .where(
+                            config.record_type.id.in_(sorted(identifiers)),
+                            config.record_type.deleted_at.is_(None),
+                        )
+                        .order_by(config.record_type.id)
+                        .with_for_update(read=True)
+                        .execution_options(populate_existing=True)
+                    )
+                ).all()
+                locked[slot] = {record.id: config.to_domain(record) for record in records}
+            else:
+                locked[slot] = {}
+
+            if current is not None and current.id not in locked[slot]:
+                raise PreconditionFailed
+            if isinstance(change, ExistingDimension) and change.id not in locked[slot]:
+                invalid.append(f"dimensions.{slot}.id")
+        return locked, invalid
+
     async def _lock_reference(
         self,
         session: AsyncSession,
@@ -399,6 +535,29 @@ def recompose_locked_master_codes(
         item.record.code = recomposed.code
         item.record.version = recomposed.version
         item.record.updated_at = recomposed.updated_at
+
+
+def _resolve_reference_update_slot(
+    *,
+    current: MasterCodeDimension | None,
+    change: ExistingDimension | NotApplicable | None,
+    locked: dict[UUID, MasterCodeDimension],
+) -> MasterCodeDimension | None:
+    if change is None:
+        return current
+    if isinstance(change, NotApplicable):
+        return None
+    return locked[change.id]
+
+
+def _dimension_ids(dimensions: MasterCodeDimensions) -> tuple[UUID | None, ...]:
+    return tuple(None if dimension is None else dimension.id for dimension in dimensions.ordered())
+
+
+def _same_persisted_state(record: MasterCodeRecord, initial: MasterCode) -> bool:
+    return record.version == initial.version and tuple(
+        getattr(record, f"{slot}_id") for slot in MasterCodeDimensions.ORDER
+    ) == _dimension_ids(initial.dimensions)
 
 
 def _joined_statement() -> Select[Any]:

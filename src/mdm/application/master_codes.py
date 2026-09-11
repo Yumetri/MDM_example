@@ -127,6 +127,35 @@ class MasterCodeCreatePlan:
                 raise ValueError(f"{field.name} selection is invalid")
 
 
+ReferenceSelection = ExistingDimension | NotApplicable
+
+
+@dataclass(frozen=True, slots=True)
+class MasterCodeReferenceUpdate:
+    """One or more existing-reference or not-applicable slot changes."""
+
+    company: ReferenceSelection | None = None
+    brand: ReferenceSelection | None = None
+    model: ReferenceSelection | None = None
+    category: ReferenceSelection | None = None
+    year: ReferenceSelection | None = None
+    memory: ReferenceSelection | None = None
+    network: ReferenceSelection | None = None
+    country: ReferenceSelection | None = None
+
+    def __post_init__(self) -> None:
+        provided = False
+        for field in fields(self):
+            selection = getattr(self, field.name)
+            if selection is None:
+                continue
+            provided = True
+            if not isinstance(selection, ReferenceSelection):
+                raise ValueError(f"{field.name} reference update is invalid")
+        if not provided:
+            raise ValueError("at least one MasterCode reference update is required")
+
+
 @dataclass(frozen=True, slots=True)
 class MasterCodeCursor:
     """Decoded keyset position for descending MasterCode creation order."""
@@ -150,7 +179,7 @@ class MasterCodePage:
 
 
 class MasterCodeRepository(Protocol):
-    """Persistence operations required by the create/read vertical slice."""
+    """Persistence operations required by MasterCode commands and active reads."""
 
     async def create(
         self,
@@ -166,6 +195,14 @@ class MasterCodeRepository(Protocol):
         after: MasterCodeCursor | None,
         limit: int,
     ) -> MasterCodePage: ...
+
+    async def update_references(
+        self,
+        master_code_id: UUID,
+        changes: MasterCodeReferenceUpdate,
+        expected_etag: str,
+        audit: MutationAuditMetadata,
+    ) -> MasterCode: ...
 
 
 class CreateMasterCode:
@@ -205,6 +242,47 @@ class CreateMasterCode:
                 "reason", "유효한 생성 이유를 입력해야 합니다."
             ) from error
         return await self._repository.create(plan, audit)
+
+
+class UpdateMasterCodeReferences:
+    """Authorize one conditional atomic MasterCode reference update."""
+
+    def __init__(
+        self,
+        repository: MasterCodeRepository,
+        authorization: AuthorizationPolicy,
+        audit_factory: HumanMutationAuditFactory,
+    ) -> None:
+        self._repository = repository
+        self._authorization = authorization
+        self._audit_factory = audit_factory
+
+    async def execute(
+        self,
+        principal: HumanPrincipal,
+        *,
+        master_code_id: UUID,
+        changes: MasterCodeReferenceUpdate,
+        expected_etag: str,
+        reason: str | None,
+    ) -> MasterCode:
+        self._authorization.authorize(principal, AuthorizationAction.MUTATE_DATA)
+        try:
+            audit = self._audit_factory.create(
+                principal,
+                master_code_operation=MasterCodeOperation.REFERENCE_UPDATE,
+                reason=reason,
+            )
+        except AuditInvariantError as error:
+            raise DimensionValidationError(
+                "reason", "유효한 참조 수정 이유를 입력해야 합니다."
+            ) from error
+        return await self._repository.update_references(
+            master_code_id,
+            changes,
+            expected_etag,
+            audit,
+        )
 
 
 class GetMasterCode:
