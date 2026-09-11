@@ -256,7 +256,9 @@ class Dimension[ValueT]:
     ) -> "Dimension[ValueT]":
         """Return one next state for an optional code and value mutation."""
         next_code = self.code if code is None else code
-        next_value = self.value if value is None else value
+        next_value = (
+            self.value if value is None or _dimension_values_equal(self.value, value) else value
+        )
         if next_code == self.code and _dimension_values_equal(self.value, next_value):
             return self
         if changed_at.utcoffset() is None:
