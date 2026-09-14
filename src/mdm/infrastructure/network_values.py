@@ -2,6 +2,8 @@
 
 from ipaddress import IPv6Address, ip_address
 
+import idna
+
 
 def normalize_network_host(value: str) -> str:
     """Return one normalized DNS hostname or IP literal."""
@@ -12,8 +14,8 @@ def normalize_network_host(value: str) -> str:
     except ValueError:
         pass
     try:
-        hostname = value.encode("idna").decode("ascii").lower()
-    except UnicodeError:
+        hostname = idna.encode(value, uts46=True, transitional=False).decode("ascii").lower()
+    except idna.IDNAError:
         raise ValueError("network host must be a hostname or IP literal") from None
     if hostname.endswith("."):
         hostname = hostname[:-1]

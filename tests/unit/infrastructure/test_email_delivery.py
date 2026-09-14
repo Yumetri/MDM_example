@@ -88,6 +88,16 @@ def test_renderer_rejects_a_public_app_url_that_is_not_an_https_origin(
 
 
 @pytest.mark.unit
+def test_renderer_preserves_ipv6_url_brackets() -> None:
+    rendered = EmailTemplateRenderer("https://[2001:db8::1]/").render(_message())
+
+    assert (
+        f"https://[2001:db8::1]/auth/registration#token={REGISTRATION_TOKEN.reveal()}"
+        in rendered.body
+    )
+
+
+@pytest.mark.unit
 async def test_in_memory_sender_records_rendered_messages_and_scripted_results() -> None:
     sender = InMemoryEmailSender(
         public_app_base_url="https://app.example.net",
@@ -138,6 +148,48 @@ async def test_smtp_sender_uses_required_starttls_and_returns_sent() -> None:
     assert kwargs["validate_certs"] is True
     assert kwargs["password"] == "smtp-secret"
     assert kwargs["timeout"] == 5.0
+
+
+@pytest.mark.unit
+async def test_smtp_sender_preserves_idna2008_hostname_identity() -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def send_command(
+        message: EmailMessage, **kwargs: Any
+    ) -> tuple[dict[str, SMTPResponse], str]:
+        calls.append(kwargs)
+        return {}, "accepted"
+
+    sender = SmtpEmailSender(
+        public_app_base_url="https://app.example.net",
+        hostname="smtp.faß.de",
+        port=587,
+        username="smtp-user",
+        password="smtp-secret",
+        sender_address="noreply@example.net",
+        timeout_seconds=5.0,
+        security=SmtpSecurity.STARTTLS,
+        send_command=send_command,
+    )
+
+    await sender.send(_message())
+
+    assert calls[0]["hostname"] == "smtp.xn--fa-hia.de"
+
+
+@pytest.mark.unit
+def test_smtp_sender_rejects_bracketed_ipv6_socket_host() -> None:
+    with pytest.raises(EmailDeliveryConfigurationError):
+        SmtpEmailSender(
+            public_app_base_url="https://app.example.net",
+            hostname="[2001:db8::1]",
+            port=587,
+            username="smtp-user",
+            password="smtp-secret",
+            sender_address="noreply@example.net",
+            timeout_seconds=5.0,
+            security=SmtpSecurity.STARTTLS,
+        )
 
 
 @pytest.mark.unit

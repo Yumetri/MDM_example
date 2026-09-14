@@ -113,6 +113,11 @@ def test_email_settings_are_loaded_from_the_approved_environment_names(
         ("127.0.0.1", "127.0.0.1"),
         ("::1", "::1"),
         ("münchen.example", "xn--mnchen-3ya.example"),
+        ("smtp.faß.de", "smtp.xn--fa-hia.de"),
+        ("smtp.xn--fa-hia.de", "smtp.xn--fa-hia.de"),
+        ("smtp.fass.de", "smtp.fass.de"),
+        ("smtp.\u03c2.gr", "smtp.xn--3xa.gr"),
+        ("smtp.\u03c3.gr", "smtp.xn--4xa.gr"),
     ],
 )
 def test_email_smtp_host_accepts_and_normalizes_dns_or_ip_literals(
@@ -126,6 +131,17 @@ def test_email_smtp_host_accepts_and_normalizes_dns_or_ip_literals(
     )
 
     assert settings.email_smtp_host == expected
+
+
+@pytest.mark.unit
+def test_email_public_app_origin_accepts_a_bracketed_ipv6_authority() -> None:
+    settings = Settings(
+        database_url="postgresql+asyncpg://mdm:secret@localhost/mdm",
+        email_public_app_base_url="https://[2001:db8::1]/",
+        _env_file=None,
+    )
+
+    assert str(settings.email_public_app_base_url) == "https://[2001:db8::1]/"
 
 
 @pytest.mark.unit
@@ -147,6 +163,8 @@ def test_email_smtp_host_accepts_and_normalizes_dns_or_ip_literals(
         {"email_smtp_host": "-smtp.example.net"},
         {"email_smtp_host": "smtp..example.net"},
         {"email_smtp_host": "fe80::1%en0"},
+        {"email_smtp_host": "[2001:db8::1]"},
+        {"email_smtp_host": "smtp.\u200dexample.net"},
         {"email_smtp_port": 0},
         {"email_smtp_port": 65536},
         {"email_smtp_security": "PLAINTEXT"},

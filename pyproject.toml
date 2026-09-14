@@ -14,6 +14,7 @@ dependencies = [
     "asyncpg>=0.30",
     "email-validator>=2.3.0",
     "fastapi[standard]>=0.116",
+    "idna>=3.19",
     "pydantic-settings>=2.10",
     "pyjwt[crypto]>=2.13.0",
     "scalar-fastapi>=1.9.0",

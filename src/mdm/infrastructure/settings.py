@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import EmailStr, Field, HttpUrl, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -52,7 +53,7 @@ class Settings(BaseSettings):
     def validate_email_public_app_origin(self) -> "Settings":
         """Require an HTTPS origin rather than a path-bearing public URL."""
         url = self.email_public_app_base_url
-        host = url.host if url is not None else None
+        host = urlsplit(str(url)).hostname if url is not None else None
         if url is not None and (
             url.scheme != "https"
             or url.username is not None

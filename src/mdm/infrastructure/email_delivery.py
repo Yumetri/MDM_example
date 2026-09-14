@@ -17,7 +17,7 @@ from mdm.application.email_delivery import (
     EmailDeliveryStatus,
     EmailMessageType,
 )
-from mdm.infrastructure.network_values import format_url_host
+from mdm.infrastructure.network_values import format_url_host, normalize_network_host
 from mdm.infrastructure.settings import Settings
 
 type SmtpSendCommand = Callable[..., Awaitable[tuple[dict[str, SMTPResponse], str]]]
@@ -107,7 +107,12 @@ class SmtpEmailSender:
         send_command: SmtpSendCommand = aiosmtplib.send,
     ) -> None:
         self._renderer = EmailTemplateRenderer(public_app_base_url)
-        self._hostname = hostname
+        try:
+            self._hostname = normalize_network_host(hostname)
+        except ValueError:
+            raise EmailDeliveryConfigurationError(
+                "SMTP host must be a hostname or IP literal"
+            ) from None
         self._port = port
         self._username = username
         self._password = password
