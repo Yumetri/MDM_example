@@ -10,6 +10,12 @@ from fastapi.responses import JSONResponse
 from mdm.api.schemas import FieldViolation, ProblemDetails
 from mdm.application.auth import InvalidAccessToken
 from mdm.application.authorization import AuthorizationDenied
+from mdm.application.dimension_lifecycle import (
+    DimensionInUse,
+    DimensionLifecycleNotFound,
+    DimensionLifecycleUnavailable,
+    DimensionNotDeleted,
+)
 from mdm.application.dimensions import (
     CompanyCodeConflict,
     CompanyMultipleConflicts,
@@ -588,7 +594,13 @@ async def master_code_repository_unavailable_handler(
 
 async def validation_error_handler(request: Request, exc: Exception) -> JSONResponse:
     validation_error = cast(RequestValidationError, exc)
-    if request.method == "PATCH" and "if-match" not in request.headers:
+    missing_required_if_match = any(
+        error["type"] == "missing" and tuple(error["loc"]) == ("header", "If-Match")
+        for error in validation_error.errors()
+    )
+    if "if-match" not in request.headers and (
+        request.method == "PATCH" or missing_required_if_match
+    ):
         return await precondition_required_handler(request, PreconditionRequired())
     violations = [
         FieldViolation(
@@ -632,3 +644,45 @@ def _safe_validation_message(error: dict[str, Any]) -> str:
         "string_too_long": "허용된 길이보다 긴 문자열입니다.",
     }
     return messages.get(error_type, "유효하지 않은 값입니다.")
+
+
+def dimension_lifecycle_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    if isinstance(exc, DimensionInUse):
+        status, code, title, detail = (
+            409,
+            "DIMENSION_IN_USE",
+            "사용 중인 Dimension",
+            "활성 MasterCode가 참조하는 Dimension은 삭제할 수 없습니다.",
+        )
+    elif isinstance(exc, DimensionNotDeleted):
+        status, code, title, detail = (
+            409,
+            "DIMENSION_NOT_DELETED",
+            "삭제되지 않은 Dimension",
+            "활성 Dimension은 삭제 상태 조회 또는 복원의 대상이 아닙니다.",
+        )
+    elif isinstance(exc, DimensionLifecycleNotFound):
+        status, code, title, detail = (
+            404,
+            "DIMENSION_NOT_FOUND",
+            "Dimension을 찾을 수 없음",
+            "요청한 경로에서 조회할 수 있는 Dimension이 없습니다.",
+        )
+    else:
+        assert isinstance(exc, DimensionLifecycleUnavailable)
+        status, code, title, detail = (
+            503,
+            "SERVICE_UNAVAILABLE",
+            "서비스를 사용할 수 없음",
+            "일시적인 오류로 요청을 처리할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+        )
+    return problem_response(
+        ProblemDetails(
+            status=status,
+            code=code,
+            title=title,
+            detail=detail,
+            type="/problems/" + code.lower().replace("_", "-"),
+            instance=request.url.path,
+        )
+    )

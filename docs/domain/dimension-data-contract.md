@@ -324,6 +324,24 @@ MasterCode 생성·참조 수정·복원도 non-null로 참조할 Dimension을 �
 - 일반 PATCH로 deleted_at을 바꿀 수 없다.
 - 이미 활성인 행의 복원은 `409 DIMENSION_NOT_DELETED`이다.
 
+### 11.3 요청 본문
+
+- 삭제와 복원 요청은 JSON 객체 본문을 필수로 제공한다. 사유가 없으면 `{}`를 전송한다.
+- 허용 필드는 선택적 `reason`뿐이며, 생략하거나 `null`이면 사유가 없는 것으로 처리한다.
+- reason의 정규화, 길이와 제어문자 검증은 기존 감사 메타데이터 계약을 따른다.
+- 본문 생략, JSON `null`, 객체가 아닌 본문과 추가 필드는 `422 VALIDATION_ERROR`이다.
+
+### 11.4 성공 응답
+
+- 삭제, tombstone 단건 조회, 복원은 모두 `200 OK`와 응답 상태의 강한 `ETag`를 반환한다.
+- 응답 본문은 기존 단건 응답과 같은 `id`, `code`, 타입별 `value`, `version`, `created_at`,
+  `updated_at`, `deleted_at`을 포함한다.
+- 삭제 응답은 삭제 완료 후 상태를 반환하고, tombstone 응답은 현재 삭제 상태를 반환한다.
+  두 응답의 `deleted_at`은 `NULL`이 아닌 삭제 시각이다.
+- 복원 응답은 복원 완료 후 활성 상태를 반환하며 `deleted_at`은 `null`이다.
+- 삭제 응답의 ETag로 복원을 요청할 수 있다. 삭제 응답을 잃은 경우 tombstone 조회로 현재
+  ETag를 다시 얻는다. 조회 이후 상태가 변경되면 기존 조건부 요청 규칙에 따라 처리한다.
+
 ## 12. DimensionLog 계약
 
 ### 12.1 테이블

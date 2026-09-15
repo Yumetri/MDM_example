@@ -112,35 +112,35 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
         },
         {
             "name": "Company Dimensions",
-            "description": "Company Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
+            "description": "Company Dimension을 생성·조회·수정·삭제·복원합니다.",
         },
         {
             "name": "Model Dimensions",
-            "description": "Model Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
+            "description": "Model Dimension을 생성·조회·수정·삭제·복원합니다.",
         },
         {
             "name": "Brand Dimensions",
-            "description": "Brand Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
+            "description": "Brand Dimension을 생성·조회·수정·삭제·복원합니다.",
         },
         {
             "name": "Country Dimensions",
-            "description": "Country Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
+            "description": "Country Dimension을 생성·조회·수정·삭제·복원합니다.",
         },
         {
             "name": "Category Dimensions",
-            "description": "Category Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
+            "description": "Category Dimension을 생성·조회·수정·삭제·복원합니다.",
         },
         {
             "name": "Year Dimensions",
-            "description": "Year Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
+            "description": "Year Dimension을 생성·조회·수정·삭제·복원합니다.",
         },
         {
             "name": "Network Dimensions",
-            "description": "Network Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
+            "description": "Network Dimension을 생성·조회·수정·삭제·복원합니다.",
         },
         {
             "name": "Memory Dimensions",
-            "description": "Memory Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
+            "description": "Memory Dimension을 생성·조회·수정·삭제·복원합니다.",
         },
         {
             "name": "MasterCodes",
@@ -323,3 +323,66 @@ def test_dimension_uuid7_timestamps_and_cursors_match_their_examples() -> None:
         ][0]
         cursor = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
         assert cursor == {"v": 1, "t": example["created_at"], "i": example["id"]}
+
+
+@pytest.mark.api
+@pytest.mark.parametrize(
+    ("name", "collection"),
+    [
+        ("Company", "companies"),
+        ("Brand", "brands"),
+        ("Model", "models"),
+        ("Category", "categories"),
+        ("Country", "countries"),
+        ("Year", "years"),
+        ("Network", "networks"),
+        ("Memory", "memories"),
+    ],
+)
+def test_dimension_lifecycle_openapi_preserves_required_body_and_typed_states(name, collection):
+    schema = app.openapi()
+    models = schema["components"]["schemas"]
+    base = f"/api/v1/dimensions/{collection}/{{dimension_id}}"
+    tombstone = models[f"{name}TombstoneResponse"]
+    assert tombstone["properties"]["deleted_at"]["type"] == "string"
+    assert tombstone["properties"]["deleted_at"]["format"] == "date-time"
+    assert tombstone["example"]["deleted_at"] is not None
+    assert models[f"{name}Response"]["properties"]["deleted_at"]["type"] == "null"
+    for action in ("delete", "restore", "tombstone"):
+        method = "get" if action == "tombstone" else "post"
+        operation = schema["paths"][f"{base}/{action}"][method]
+        assert operation["tags"] == [f"{name} Dimensions"]
+        for status, error_response in operation["responses"].items():
+            if int(status) >= 400:
+                assert error_response["content"]["application/problem+json"]["schema"] == {
+                    "$ref": "#/components/schemas/ProblemDetails"
+                }
+        response = operation["responses"]["200"]
+        model = f"{name}Response" if action == "restore" else f"{name}TombstoneResponse"
+        assert (
+            response["content"]["application/json"]["schema"]["$ref"]
+            == f"#/components/schemas/{model}"
+        )
+        if action == "tombstone":
+            assert "requestBody" not in operation
+        else:
+            assert operation["requestBody"]["required"] is True
+            request_model = models["DimensionLifecycleRequest"]
+            assert set(request_model["properties"]) == {"reason"}
+            assert request_model["additionalProperties"] is False
+            assert {"400", "412", "428"} <= operation["responses"].keys()
+            if_match = next(p for p in operation["parameters"] if p["name"] == "If-Match")
+            assert if_match["required"] is True
+        example = response["content"]["application/json"].get("example", tombstone["example"])
+        assert response["headers"]["ETag"]["example"] == f'"{example["version"]}"'
+    restored_example = schema["paths"][f"{base}/restore"]["post"]["responses"]["200"]["content"][
+        "application/json"
+    ]["example"]
+    assert restored_example["deleted_at"] is None
+    value_schema = tombstone["properties"]["value"]
+    if name == "Year":
+        assert (value_schema["minimum"], value_schema["maximum"]) == (2000, 2999)
+    elif name == "Network":
+        assert (value_schema["minimum"], value_schema["maximum"]) == (1, 5)
+    elif name == "Memory":
+        assert value_schema["$ref"] == "#/components/schemas/MemoryValueResponse"

@@ -9,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mdm.api.auth import build_human_principal_dependency
+from mdm.api.dimension_lifecycle import build_dimension_lifecycle_router
 from mdm.api.dimensions import build_company_router
 from mdm.api.documentation import build_documentation_router
 from mdm.api.errors import (
@@ -16,6 +17,7 @@ from mdm.api.errors import (
     company_conflict_handler,
     company_not_found_handler,
     company_repository_unavailable_handler,
+    dimension_lifecycle_error_handler,
     dimension_validation_error_handler,
     inline_dimension_conflict_handler,
     invalid_access_token_handler,
@@ -53,6 +55,15 @@ from mdm.api.string_dimensions import (
 from mdm.application.audit import HumanMutationAuditFactory
 from mdm.application.auth import AuthenticateHumanPrincipal, InvalidAccessToken
 from mdm.application.authorization import AuthorizationDenied, AuthorizationPolicy
+from mdm.application.dimension_lifecycle import (
+    DeleteDimension,
+    DimensionInUse,
+    DimensionLifecycleNotFound,
+    DimensionLifecycleUnavailable,
+    DimensionNotDeleted,
+    GetDimensionTombstone,
+    RestoreDimension,
+)
 from mdm.application.dimensions import (
     CompanyCodeConflict,
     CompanyMultipleConflicts,
@@ -135,6 +146,16 @@ from mdm.infrastructure.database import (
 from mdm.infrastructure.jwt import RejectingAccessTokenVerifier, build_access_jwt_codec
 from mdm.infrastructure.operational_events import JsonLineOperationalEventSink
 from mdm.infrastructure.repositories.companies import SqlAlchemyCompanyRepository
+from mdm.infrastructure.repositories.dimension_lifecycle import (
+    SqlAlchemyBrandLifecycleRepository,
+    SqlAlchemyCategoryLifecycleRepository,
+    SqlAlchemyCompanyLifecycleRepository,
+    SqlAlchemyCountryLifecycleRepository,
+    SqlAlchemyMemoryLifecycleRepository,
+    SqlAlchemyModelLifecycleRepository,
+    SqlAlchemyNetworkLifecycleRepository,
+    SqlAlchemyYearLifecycleRepository,
+)
 from mdm.infrastructure.repositories.master_codes import SqlAlchemyMasterCodeRepository
 from mdm.infrastructure.repositories.memory_dimensions import SqlAlchemyMemoryRepository
 from mdm.infrastructure.repositories.numeric_dimensions import (
@@ -154,6 +175,7 @@ from mdm.infrastructure.uuid7 import Uuid7Generator
 def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
     """Assemble the API, application services, and infrastructure adapters."""
     engine: AsyncEngine | None = None
+    lifecycle_routers = []
     company_router = None
     string_dimension_routers = []
     numeric_dimension_routers = []
@@ -181,6 +203,94 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         authorization = AuthorizationPolicy()
         principal_dependency = build_human_principal_dependency(authenticate)
         audit_factory = HumanMutationAuditFactory(change_set_ids=Uuid7Generator().new)
+        company_lifecycle = SqlAlchemyCompanyLifecycleRepository(session_factory)
+        lifecycle_routers.append(
+            build_dimension_lifecycle_router(
+                singular="company",
+                delete=DeleteDimension(company_lifecycle, authorization, audit_factory),
+                get_tombstone=GetDimensionTombstone(company_lifecycle, authorization),
+                restore=RestoreDimension(company_lifecycle, authorization, audit_factory),
+                principal_dependency=principal_dependency,
+                authorization=authorization,
+            )
+        )
+        brand_lifecycle = SqlAlchemyBrandLifecycleRepository(session_factory)
+        lifecycle_routers.append(
+            build_dimension_lifecycle_router(
+                singular="brand",
+                delete=DeleteDimension(brand_lifecycle, authorization, audit_factory),
+                get_tombstone=GetDimensionTombstone(brand_lifecycle, authorization),
+                restore=RestoreDimension(brand_lifecycle, authorization, audit_factory),
+                principal_dependency=principal_dependency,
+                authorization=authorization,
+            )
+        )
+        model_lifecycle = SqlAlchemyModelLifecycleRepository(session_factory)
+        lifecycle_routers.append(
+            build_dimension_lifecycle_router(
+                singular="model",
+                delete=DeleteDimension(model_lifecycle, authorization, audit_factory),
+                get_tombstone=GetDimensionTombstone(model_lifecycle, authorization),
+                restore=RestoreDimension(model_lifecycle, authorization, audit_factory),
+                principal_dependency=principal_dependency,
+                authorization=authorization,
+            )
+        )
+        category_lifecycle = SqlAlchemyCategoryLifecycleRepository(session_factory)
+        lifecycle_routers.append(
+            build_dimension_lifecycle_router(
+                singular="category",
+                delete=DeleteDimension(category_lifecycle, authorization, audit_factory),
+                get_tombstone=GetDimensionTombstone(category_lifecycle, authorization),
+                restore=RestoreDimension(category_lifecycle, authorization, audit_factory),
+                principal_dependency=principal_dependency,
+                authorization=authorization,
+            )
+        )
+        country_lifecycle = SqlAlchemyCountryLifecycleRepository(session_factory)
+        lifecycle_routers.append(
+            build_dimension_lifecycle_router(
+                singular="country",
+                delete=DeleteDimension(country_lifecycle, authorization, audit_factory),
+                get_tombstone=GetDimensionTombstone(country_lifecycle, authorization),
+                restore=RestoreDimension(country_lifecycle, authorization, audit_factory),
+                principal_dependency=principal_dependency,
+                authorization=authorization,
+            )
+        )
+        year_lifecycle = SqlAlchemyYearLifecycleRepository(session_factory)
+        lifecycle_routers.append(
+            build_dimension_lifecycle_router(
+                singular="year",
+                delete=DeleteDimension(year_lifecycle, authorization, audit_factory),
+                get_tombstone=GetDimensionTombstone(year_lifecycle, authorization),
+                restore=RestoreDimension(year_lifecycle, authorization, audit_factory),
+                principal_dependency=principal_dependency,
+                authorization=authorization,
+            )
+        )
+        network_lifecycle = SqlAlchemyNetworkLifecycleRepository(session_factory)
+        lifecycle_routers.append(
+            build_dimension_lifecycle_router(
+                singular="network",
+                delete=DeleteDimension(network_lifecycle, authorization, audit_factory),
+                get_tombstone=GetDimensionTombstone(network_lifecycle, authorization),
+                restore=RestoreDimension(network_lifecycle, authorization, audit_factory),
+                principal_dependency=principal_dependency,
+                authorization=authorization,
+            )
+        )
+        memory_lifecycle = SqlAlchemyMemoryLifecycleRepository(session_factory)
+        lifecycle_routers.append(
+            build_dimension_lifecycle_router(
+                singular="memory",
+                delete=DeleteDimension(memory_lifecycle, authorization, audit_factory),
+                get_tombstone=GetDimensionTombstone(memory_lifecycle, authorization),
+                restore=RestoreDimension(memory_lifecycle, authorization, audit_factory),
+                principal_dependency=principal_dependency,
+                authorization=authorization,
+            )
+        )
         company_router = build_company_router(
             create_company=CreateCompany(
                 repository,
@@ -312,35 +422,35 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
             },
             {
                 "name": "Company Dimensions",
-                "description": "Company Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
+                "description": "Company Dimension을 생성·조회·수정·삭제·복원합니다.",
             },
             {
                 "name": "Model Dimensions",
-                "description": "Model Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
+                "description": "Model Dimension을 생성·조회·수정·삭제·복원합니다.",
             },
             {
                 "name": "Brand Dimensions",
-                "description": "Brand Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
+                "description": "Brand Dimension을 생성·조회·수정·삭제·복원합니다.",
             },
             {
                 "name": "Country Dimensions",
-                "description": "Country Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
+                "description": "Country Dimension을 생성·조회·수정·삭제·복원합니다.",
             },
             {
                 "name": "Category Dimensions",
-                "description": "Category Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
+                "description": "Category Dimension을 생성·조회·수정·삭제·복원합니다.",
             },
             {
                 "name": "Year Dimensions",
-                "description": "Year Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
+                "description": "Year Dimension을 생성·조회·수정·삭제·복원합니다.",
             },
             {
                 "name": "Network Dimensions",
-                "description": "Network Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
+                "description": "Network Dimension을 생성·조회·수정·삭제·복원합니다.",
             },
             {
                 "name": "Memory Dimensions",
-                "description": "Memory Dimension을 생성·수정하고 활성 데이터를 조회합니다.",
+                "description": "Memory Dimension을 생성·조회·수정·삭제·복원합니다.",
             },
             {
                 "name": "MasterCodes",
@@ -432,6 +542,15 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         validation_error_handler,
     )
     application.add_exception_handler(Exception, unexpected_error_handler)
+    for error_type in (
+        DimensionInUse,
+        DimensionNotDeleted,
+        DimensionLifecycleNotFound,
+        DimensionLifecycleUnavailable,
+    ):
+        application.add_exception_handler(error_type, dimension_lifecycle_error_handler)
+    for router in lifecycle_routers:
+        application.include_router(router)
     application.include_router(build_health_router(readiness_check))
     if company_router is not None:
         application.include_router(company_router)
