@@ -74,6 +74,7 @@ from mdm.application.master_codes import (
     MasterCodeConflict,
     MasterCodeNotFound,
     MasterCodeRepositoryUnavailable,
+    UpdateMasterCodeReferences,
 )
 from mdm.application.memory_dimensions import (
     CreateMemory,
@@ -260,6 +261,11 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
             ),
             get_master_code=GetMasterCode(master_code_repository, authorization),
             list_master_codes=ListMasterCodes(master_code_repository, authorization),
+            update_master_code_references=UpdateMasterCodeReferences(
+                master_code_repository,
+                authorization,
+                audit_factory,
+            ),
             principal_dependency=principal_dependency,
             authorization=authorization,
         )
@@ -338,7 +344,7 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
             },
             {
                 "name": "MasterCodes",
-                "description": "Dimension 참조를 합성한 MasterCode를 생성하고 조회합니다.",
+                "description": "Dimension 참조를 합성한 MasterCode를 생성·수정하고 조회합니다.",
             },
         ],
         docs_url=None,

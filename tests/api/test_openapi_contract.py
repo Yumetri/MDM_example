@@ -144,7 +144,7 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
         },
         {
             "name": "MasterCodes",
-            "description": "Dimension 참조를 합성한 MasterCode를 생성하고 조회합니다.",
+            "description": "Dimension 참조를 합성한 MasterCode를 생성·수정하고 조회합니다.",
         },
     ]
 

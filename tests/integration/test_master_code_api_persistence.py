@@ -91,6 +91,11 @@ async def test_master_code_routes_cross_real_auth_repository_and_audit(
     async with application.router.lifespan_context(application):
         transport = ASGITransport(app=application, raise_app_exceptions=False)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
+            company = await client.post(
+                "/api/v1/dimensions/companies",
+                headers={"Authorization": f"Bearer {admin_token}"},
+                json={"code": "COM", "value": "Company"},
+            )
             denied = await client.post(
                 "/api/v1/master-codes",
                 headers={"Authorization": f"Bearer {user_token}"},
@@ -113,6 +118,33 @@ async def test_master_code_routes_cross_real_auth_repository_and_audit(
                 f"/api/v1/master-codes/{created.json()['id']}",
                 headers={"Authorization": f"Bearer {user_token}"},
             )
+            denied_update = await client.patch(
+                f"/api/v1/master-codes/{created.json()['id']}",
+                headers={
+                    "Authorization": f"Bearer {user_token}",
+                    "If-Match": created.headers["etag"],
+                },
+                json={"dimensions": {"company": {"mode": "REFERENCE", "id": company.json()["id"]}}},
+            )
+            updated = await client.patch(
+                f"/api/v1/master-codes/{created.json()['id']}",
+                headers={
+                    "Authorization": f"Bearer {admin_token}",
+                    "If-Match": created.headers["etag"],
+                },
+                json={
+                    "dimensions": {"company": {"mode": "REFERENCE", "id": company.json()["id"]}},
+                    "reason": "Company 참조 연결",
+                },
+            )
+            stale = await client.patch(
+                f"/api/v1/master-codes/{created.json()['id']}",
+                headers={
+                    "Authorization": f"Bearer {admin_token}",
+                    "If-Match": created.headers["etag"],
+                },
+                json={"dimensions": {"company": {"mode": "NOT_APPLICABLE"}}},
+            )
 
     assert denied.status_code == 403
     assert created.status_code == 201
@@ -125,3 +157,25 @@ async def test_master_code_routes_cross_real_auth_repository_and_audit(
     assert detail.status_code == 200
     assert detail.json() == created.json()
     assert detail.headers["etag"] == created.headers["etag"]
+    assert denied_update.status_code == 403
+    assert updated.status_code == 200
+    assert updated.json()["code"] == "COM-NNN-NNN-NNN-NNN-NNN-NNN-NNN"
+    assert updated.json()["version"] == 2
+    assert updated.json()["dimensions"]["company"]["id"] == company.json()["id"]
+    assert updated.headers["etag"] != created.headers["etag"]
+    assert stale.status_code == 412
+    assert stale.json()["code"] == "PRECONDITION_FAILED"
+
+    engine = create_engine(database_url)
+    async with engine.connect() as connection:
+        operations = (
+            await connection.scalars(
+                text(
+                    "SELECT operation FROM master_code_logs "
+                    "WHERE master_code_id = :id ORDER BY master_code_version"
+                ),
+                {"id": UUID(created.json()["id"])},
+            )
+        ).all()
+    await engine.dispose()
+    assert operations == ["CREATE", "REFERENCE_UPDATE"]
