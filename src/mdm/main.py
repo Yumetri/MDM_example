@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from mdm.api.audit_logs import audit_log_unavailable_handler, build_audit_log_router
 from mdm.api.auth import build_human_principal_dependency
 from mdm.api.change_requests import (
     CHANGE_REQUEST_ERRORS,
@@ -60,6 +61,7 @@ from mdm.api.string_dimensions import (
     build_model_router,
 )
 from mdm.application.audit import HumanMutationAuditFactory
+from mdm.application.audit_logs import AuditLogRepositoryUnavailable, ListAuditLogs
 from mdm.application.auth import AuthenticateHumanPrincipal, InvalidAccessToken
 from mdm.application.authorization import AuthorizationDenied, AuthorizationPolicy
 from mdm.application.change_requests import ChangeRequestUseCases
@@ -160,6 +162,7 @@ from mdm.infrastructure.database import (
 )
 from mdm.infrastructure.jwt import RejectingAccessTokenVerifier, build_access_jwt_codec
 from mdm.infrastructure.operational_events import JsonLineOperationalEventSink
+from mdm.infrastructure.repositories.audit_logs import SqlAlchemyAuditLogRepository
 from mdm.infrastructure.repositories.change_requests import SqlAlchemyChangeRequestRepository
 from mdm.infrastructure.repositories.companies import SqlAlchemyCompanyRepository
 from mdm.infrastructure.repositories.dimension_lifecycle import (
@@ -191,6 +194,7 @@ from mdm.infrastructure.uuid7 import Uuid7Generator
 def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
     """Assemble the API, application services, and infrastructure adapters."""
     engine: AsyncEngine | None = None
+    audit_log_router = None
     lifecycle_routers = []
     company_router = None
     string_dimension_routers = []
@@ -220,6 +224,11 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         )
         authorization = AuthorizationPolicy()
         principal_dependency = build_human_principal_dependency(authenticate)
+        audit_log_router = build_audit_log_router(
+            use_case=ListAuditLogs(SqlAlchemyAuditLogRepository(session_factory), authorization),
+            principal_dependency=principal_dependency,
+            authorization=authorization,
+        )
         audit_factory = HumanMutationAuditFactory(change_set_ids=Uuid7Generator().new)
         company_lifecycle = SqlAlchemyCompanyLifecycleRepository(session_factory)
         lifecycle_routers.append(
@@ -488,6 +497,10 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
                 "name": "MasterCodes",
                 "description": "Dimension 참조를 합성한 MasterCode를 생성·수정하고 조회합니다.",
             },
+            {
+                "name": "AuditLogs",
+                "description": "관리자가 Dimension·MasterCode의 변경 이력을 조회합니다.",
+            },
         ],
         docs_url=None,
         lifespan=lifespan,
@@ -587,7 +600,10 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         application.add_exception_handler(error_type, dimension_lifecycle_error_handler)
     for router in lifecycle_routers:
         application.include_router(router)
+    application.add_exception_handler(AuditLogRepositoryUnavailable, audit_log_unavailable_handler)
     application.include_router(build_health_router(readiness_check))
+    if audit_log_router is not None:
+        application.include_router(audit_log_router)
     if company_router is not None:
         application.include_router(company_router)
     for router in string_dimension_routers:

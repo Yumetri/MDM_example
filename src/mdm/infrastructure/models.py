@@ -313,6 +313,7 @@ class CompanyLogRecord(Base):
             "field_name",
             name="uq_dimension_company_logs_change_field",
         ),
+        Index("ix_dimension_company_logs_changed_at_id", "changed_at", "id"),
         Index(
             "ix_dimension_company_logs_dimension_changed_id",
             "dimension_id",
@@ -438,6 +439,7 @@ def _string_dimension_log_constraints(singular: str) -> tuple[object, ...]:
             "field_name",
             name=f"uq_{table}_change_field",
         ),
+        Index(f"ix_{table}_changed_at_id", "changed_at", "id"),
         Index(
             f"ix_{table}_dimension_changed_id",
             "dimension_id",
@@ -635,6 +637,7 @@ def _numeric_dimension_log_constraints(
             "field_name",
             name=f"uq_{table}_change_field",
         ),
+        Index(f"ix_{table}_changed_at_id", "changed_at", "id"),
         Index(
             f"ix_{table}_dimension_changed_id",
             "dimension_id",
@@ -800,6 +803,7 @@ def _memory_log_constraints() -> tuple[object, ...]:
             "field_name",
             name=f"uq_{table}_change_field",
         ),
+        Index(f"ix_{table}_changed_at_id", "changed_at", "id"),
         Index(
             f"ix_{table}_dimension_changed_id",
             "dimension_id",
@@ -1028,6 +1032,7 @@ class MasterCodeLogRecord(Base):
             "char_length(actor_id) BETWEEN 1 AND 255 AND btrim(actor_id, ' ') = actor_id",
             name="ck_master_code_logs_actor_id",
         ),
+        Index("ix_master_code_logs_changed_at_id", "changed_at", "id"),
         Index(
             "ix_master_code_logs_master_changed_id",
             "master_code_id",

@@ -13,14 +13,14 @@ class AuditInvariantError(ValueError):
 
 
 class ActorKind(StrEnum):
-    """The closed actor representation stored in domain audit logs."""
+    """HUMAN은 사람, SYSTEM은 내부 자동 작업 주체를 나타냅니다."""
 
     HUMAN = "HUMAN"
     SYSTEM = "SYSTEM"
 
 
 class DimensionOperation(StrEnum):
-    """Dimension mutations understood by future audit triggers."""
+    """Dimension의 생성, code·value 변경, 논리 삭제, 복원 작업 종류입니다."""
 
     CREATE = "CREATE"
     UPDATE = "UPDATE"
@@ -29,7 +29,7 @@ class DimensionOperation(StrEnum):
 
 
 class MasterCodeOperation(StrEnum):
-    """MasterCode mutations understood by future audit triggers."""
+    """MasterCode의 생성, 참조 변경, 재합성, 논리 삭제, 복원 작업 종류입니다."""
 
     CREATE = "CREATE"
     REFERENCE_UPDATE = "REFERENCE_UPDATE"

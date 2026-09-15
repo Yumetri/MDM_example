@@ -481,6 +481,82 @@ BEFORE/AFTER 감사 트리거, 컨텍스트 없는 업무 write 거부는 #5가 
 USER가 제안한 inline Dimension 생성은 MasterCode 변경 요청의 관리자 승인 트랜잭션에서 승인한
 HUMAN 관리자의 작업으로 실행하고 감사한다. SYSTEM 승인 우회나 자동 실행으로 바꾸지 않는다.
 
+### 12.6 감사 로그 조회의 공통 계약
+
+#### 조회 경로별 필터 범위
+
+타입별 DimensionLog 목록 8개와 MasterCodeLog 목록은 대상 ID(`dimension_id` 또는
+`master_code_id`), `change_set_id`, 기간, actor와 operation 필터를 제공한다.
+DimensionLog 목록은 `field_name` 필터도 제공한다.
+
+통합 조회 `GET /api/v1/admin/change-sets/{change_set_id}/logs`는 경로에 지정한 change set에
+속한 전체 DimensionLog와 MasterCodeLog를 페이지로 반환한다. 쿼리 파라미터는 `cursor`와
+`limit`만 허용한다. 검색 필터를 전달하면 `422 VALIDATION_ERROR`로 거부한다.
+
+형식이 올바른 `change_set_id`에 해당하는 로그가 없으면 통합 조회는 `200 OK`와
+`{"items": [], "next_cursor": null}`을 반환한다. UUID 형식이 잘못되면
+`422 VALIDATION_ERROR`로 거부한다.
+
+#### 페이지 응답
+
+`limit`은 기본 50개이며 1~100개를 허용한다. 응답은 `items`와 `next_cursor`를 제공하고
+마지막 페이지의 `next_cursor`는 `null`이다. 전체 건수는 제공하지 않는다.
+개별 목록과 통합 조회는 같은 로그 응답 형식을 사용한다.
+
+DimensionLog는 `source_kind=DIMENSION`과 타입에 맞는 `source_type`을 제공한다.
+`source_type`은 `COMPANY`, `MODEL`, `BRAND`, `COUNTRY`, `CATEGORY`, `YEAR`, `NETWORK`,
+`MEMORY` 중 하나이다. MasterCodeLog는 `source_kind=MASTER_CODE`,
+`source_type=MASTER_CODE`를 제공한다.
+
+변경 전후 값은 기존 로그 계약의 자료형을 유지한다. Year와 Network의 VALUE는 정수,
+DELETED는 boolean, Memory의 VALUE는 객체로 반환한다.
+
+#### 기간 필터
+
+DimensionLog와 MasterCodeLog 조회 API의 기간 필터는 로그의 `changed_at`을 기준으로 한다.
+
+- `changed_from`은 해당 시각 이상을 포함한다.
+- `changed_before`는 해당 시각 미만만 포함한다.
+- 입력 날짜·시각에는 시간대가 필수이며 UTC로 변환해 비교한다.
+- 생략한 경계에는 제한을 두지 않는다.
+- 두 경계를 모두 제공했을 때 `changed_from >= changed_before`이면
+  `422 VALIDATION_ERROR`로 거부한다.
+
+예를 들어 한국 시간 2026년 9월 15일 하루는
+`changed_from=2026-09-15T00:00:00+09:00`과
+`changed_before=2026-09-16T00:00:00+09:00`으로 조회한다.
+
+#### actor 필터
+
+actor 검색은 다음 선택적 필터를 사용한다.
+
+- `actor_id`: 로그에 저장된 작업 수행자의 식별자와 정확히 일치한다.
+- `actor_kind`: `HUMAN` 또는 `SYSTEM`과 정확히 일치한다.
+- `actor_role`: 로그에 저장된 `USER`, `ADMIN`, `SUPER_ADMIN` 역할과 정확히 일치한다.
+
+여러 actor 필터를 제공하면 모두 만족하는 로그만 반환하고 생략한 필터에는 제한을 두지
+않는다. `actor_role`은 사용자의 현재 역할이 아니라 변경 당시 로그에 보존한 역할을 검색한다.
+
+#### 커서와 검색 조건
+
+커서는 발급 당시의 조회 경로와 검색 조건에 묶인다. 다음 페이지를 요청할 때 조회 경로나
+검색 조건이 달라지면 `422 VALIDATION_ERROR`로 거부한다. 조건을 변경하려면 커서를 생략하고
+첫 페이지부터 다시 조회해야 한다. 페이지 크기인 `limit`은 변경할 수 있다.
+
+기간 조건은 UTC로 변환한 시각으로 비교한다. 따라서 시간대 표현이 달라도 같은 시각을
+나타내면 동일한 검색 조건으로 취급한다.
+
+#### 페이지 조회 중 새 로그의 커밋
+
+조회 시작 전에 커밋된 로그는 동일한 검색 조건으로 끝까지 페이지를 순회하면 중복·누락 없이
+반환한다. 각 페이지는 해당 조회 시점에 커밋된 데이터를 읽으며, 전체 페이지를 첫 조회
+시점의 DB 스냅샷으로 고정하지 않는다.
+
+`changed_at`은 변경 시각이고 커밋 시각이 아니므로 조회 도중 커밋된 로그는 이미 지나간
+정렬 위치에 들어올 수 있다. 조회 도중 커밋된 로그는 정렬 위치에 따라 포함되거나 제외될 수
+있으며, 모두 확인하려면 첫 페이지부터 다시 조회한다. 하나의 change set에 속한 로그는
+기존 원자성 계약대로 함께 커밋된다.
+
 ## 13. 애플리케이션과 DB 책임
 
 | 규칙 | 도메인·애플리케이션 | PostgreSQL |
