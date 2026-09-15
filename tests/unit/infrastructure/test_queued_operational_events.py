@@ -25,12 +25,12 @@ class ControlledWriter:
         self.thread_ids: list[int] = []
         self.fail_first = fail_first
 
-    def emit(self, value: OperationalEvent) -> None:
+    def emit(self, event: OperationalEvent) -> None:
         self.thread_ids.append(threading.get_ident())
         if not self.events:
             self.entered.set()
             self.release.wait(timeout=5)
-        self.events.append(value)
+        self.events.append(event)
         if self.fail_first and len(self.events) == 1:
             raise OSError("output failed")
 
