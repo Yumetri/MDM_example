@@ -26,6 +26,38 @@ class Base(DeclarativeBase):
     """Base class whose metadata is used by Alembic."""
 
 
+class MasterCodeChangeRequestRecord(Base):
+    """Original proposal and its single review result, protected by DB triggers."""
+
+    __tablename__ = "master_code_change_requests"
+    __table_args__ = (
+        UniqueConstraint("applied_change_set_id", name="uq_change_requests_applied_change_set"),
+        Index("ix_change_requests_review_queue", "status", "created_at", "id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    original_operation: Mapped[str] = mapped_column(String(16))
+    original_target_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True))
+    original_payload: Mapped[dict[str, object] | None] = mapped_column(JSONB(none_as_null=True))
+    original_expected_etag: Mapped[str | None] = mapped_column(Text)
+    requester_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
+    reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("clock_timestamp()")
+    )
+    status: Mapped[str] = mapped_column(String(21), server_default="PENDING")
+    approved_operation: Mapped[str | None] = mapped_column(String(16))
+    approved_target_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True))
+    approved_payload: Mapped[dict[str, object] | None] = mapped_column(JSONB(none_as_null=True))
+    approved_expected_etag: Mapped[str | None] = mapped_column(Text)
+    reviewer_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    review_message: Mapped[str | None] = mapped_column(String(500))
+    applied_change_set_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True))
+
+
 class UserRecord(Base):
     """Current HUMAN user identity and credential state."""
 
