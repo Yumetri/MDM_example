@@ -57,6 +57,8 @@ class HumanPrincipal:
 
 type OperationalEventName = Literal[
     "INVALID_ACCESS_TOKEN",
+    "LOGIN_FAILED",
+    "REFRESH_CONFLICT",
     "ORIGIN_VALIDATION_FAILED",
     "CSRF_VALIDATION_FAILED",
     "RATE_LIMIT_EXCEEDED",

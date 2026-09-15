@@ -1,7 +1,7 @@
 """FastAPI composition root."""
 
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime
 
 from fastapi import FastAPI
@@ -154,6 +154,7 @@ from mdm.application.string_dimensions import (
     UpdateCountryValue,
     UpdateModelValue,
 )
+from mdm.auth_sessions import AuthSessionComponents, build_auth_sessions
 from mdm.domain.dimensions import DimensionValidationError
 from mdm.infrastructure.database import (
     SqlAlchemyDatabaseProbe,
@@ -194,6 +195,7 @@ from mdm.infrastructure.uuid7 import Uuid7Generator
 def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
     """Assemble the API, application services, and infrastructure adapters."""
     engine: AsyncEngine | None = None
+    auth_sessions: AuthSessionComponents | None = None
     audit_log_router = None
     lifecycle_routers = []
     company_router = None
@@ -224,6 +226,7 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         )
         authorization = AuthorizationPolicy()
         principal_dependency = build_human_principal_dependency(authenticate)
+        auth_sessions = build_auth_sessions(settings, session_factory, principal_dependency)
         audit_log_router = build_audit_log_router(
             use_case=ListAuditLogs(SqlAlchemyAuditLogRepository(session_factory), authorization),
             principal_dependency=principal_dependency,
@@ -445,9 +448,14 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
-        yield
-        if engine is not None:
-            await engine.dispose()
+        try:
+            async with AsyncExitStack() as stack:
+                if auth_sessions is not None:
+                    await stack.enter_async_context(auth_sessions.lifespan(_))
+                yield
+        finally:
+            if engine is not None:
+                await engine.dispose()
 
     application = FastAPI(
         title="MDM API",
@@ -457,6 +465,10 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         ),
         version="0.1.0",
         openapi_tags=[
+            {
+                "name": "Authentication",
+                "description": "로그인·세션 갱신·로그아웃과 현재 프로필을 제공합니다.",
+            },
             {
                 "name": "Health",
                 "description": "서비스의 실행 상태와 요청 처리 준비 상태를 각각 확인합니다.",
@@ -602,6 +614,8 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         application.include_router(router)
     application.add_exception_handler(AuditLogRepositoryUnavailable, audit_log_unavailable_handler)
     application.include_router(build_health_router(readiness_check))
+    if auth_sessions is not None:
+        application.include_router(auth_sessions.router)
     if audit_log_router is not None:
         application.include_router(audit_log_router)
     if company_router is not None:

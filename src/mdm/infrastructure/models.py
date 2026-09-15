@@ -9,8 +9,10 @@ from sqlalchemy import (
     Computed,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     SmallInteger,
     String,
     Text,
@@ -1064,3 +1066,69 @@ class MasterCodeLogRecord(Base):
     actor_role: Mapped[str | None] = mapped_column(String(11))
     actor_id: Mapped[str] = mapped_column(String(255), nullable=False)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RefreshFamilyRecord(Base):
+    """A user's current or retained revoked refresh family."""
+
+    __tablename__ = "refresh_families"
+    __table_args__ = (
+        Index(
+            "uq_refresh_families_active_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status = 'ACTIVE'"),
+        ),
+        Index("ix_refresh_families_user_id", "user_id", "id"),
+        CheckConstraint(
+            "(status = 'ACTIVE' AND revoked_at IS NULL) OR "
+            "(status = 'REVOKED' AND revoked_at IS NOT NULL)",
+            name="ck_refresh_family_state",
+        ),
+        CheckConstraint(
+            "expires_at > created_at AND updated_at >= created_at AND "
+            "(revoked_at IS NULL OR revoked_at >= created_at)",
+            name="ck_refresh_family_times",
+        ),
+    )
+    id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    status: Mapped[str] = mapped_column(String(7), server_default="ACTIVE")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class RefreshTokenRecord(Base):
+    """Digest-only credential with its single replacement in the same family."""
+
+    __tablename__ = "refresh_tokens"
+    __table_args__ = (
+        UniqueConstraint("digest", name="uq_refresh_tokens_digest"),
+        UniqueConstraint("family_id", "id", name="uq_refresh_tokens_family_id_id"),
+        ForeignKeyConstraint(
+            ["family_id", "replaced_by_id"],
+            ["refresh_tokens.family_id", "refresh_tokens.id"],
+            name="fk_refresh_tokens_replacement",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        CheckConstraint("octet_length(digest) = 32", name="ck_refresh_token_digest"),
+        CheckConstraint(
+            "(used_at IS NULL AND replaced_by_id IS NULL) OR "
+            "(used_at IS NOT NULL AND used_at >= issued_at "
+            "AND replaced_by_id IS NOT NULL AND replaced_by_id <> id)",
+            name="ck_refresh_token_used",
+        ),
+    )
+    id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    family_id: Mapped[UUID] = mapped_column(ForeignKey("refresh_families.id", ondelete="RESTRICT"))
+    digest: Mapped[bytes] = mapped_column(LargeBinary)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    replaced_by_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True))
