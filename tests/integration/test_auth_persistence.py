@@ -32,7 +32,9 @@ from mdm.infrastructure.settings import Settings
 async def auth_engine() -> AsyncGenerator[AsyncEngine]:
     engine = create_engine(Settings().reveal_database_url())
     async with engine.begin() as connection:
-        await connection.execute(text("TRUNCATE user_security_events, users"))
+        await connection.execute(
+            text("TRUNCATE refresh_tokens, refresh_families, user_security_events, users")
+        )
     yield engine
     await engine.dispose()
 

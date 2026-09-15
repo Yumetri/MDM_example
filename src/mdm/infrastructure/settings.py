@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     )
 
     database_url: SecretStr
+    auth_sessions_enabled: bool = False
     auth_password_hash_memory_mib: int = Field(default=19, ge=1)
     auth_password_hash_iterations: int = Field(default=2, ge=1)
     auth_password_hash_parallelism: int = Field(default=1, ge=1)
@@ -45,6 +46,20 @@ class Settings(BaseSettings):
     email_smtp_password: SecretStr | None = Field(default=None, min_length=1)
     email_sender_address: EmailStr | None = None
     email_smtp_timeout_seconds: float = Field(default=10.0, gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_enabled_sessions(self) -> "Settings":
+        if self.auth_sessions_enabled and (
+            not self.auth_allowed_origins
+            or self.auth_ip_hmac_secret is None
+            or not self.auth_jwt_active_kid
+            or self.auth_jwt_private_key_path is None
+            or self.auth_jwt_jwks_path is None
+        ):
+            raise ValueError(
+                "enabled sessions require JWT keys, allowed origins and IP HMAC secret"
+            )
+        return self
 
     @field_validator("auth_ip_hmac_secret")
     @classmethod

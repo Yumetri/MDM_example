@@ -47,15 +47,16 @@ def test_all_service_routes_use_the_global_v1_prefix() -> None:
 def test_openapi_success_responses_have_schemas() -> None:
     for operation in public_operations(app.openapi()):
         success_responses = [
-            response
+            (status, response)
             for status, response in operation["responses"].items()
             if status.startswith("2")
         ]
         assert success_responses
-        assert all(
-            response.get("content", {}).get("application/json", {}).get("schema")
-            for response in success_responses
-        )
+        for status, response in success_responses:
+            if status == "204":
+                assert "content" not in response
+            else:
+                assert response.get("content", {}).get("application/json", {}).get("schema")
 
 
 @pytest.mark.api
@@ -106,6 +107,10 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
         "Dimension을 참조해 고유 코드를 생성하는 마스터 데이터를 관리하는 서비스 API입니다."
     )
     assert schema["tags"] == [
+        {
+            "name": "Authentication",
+            "description": "로그인·세션 갱신·로그아웃과 현재 프로필을 제공합니다.",
+        },
         {
             "name": "Health",
             "description": "서비스의 실행 상태와 요청 처리 준비 상태를 각각 확인합니다.",

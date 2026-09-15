@@ -183,3 +183,27 @@ def test_email_settings_reject_unsafe_or_invalid_values(override: dict[str, Any]
             _env_file=None,
             **override,
         )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("missing", ["origins", "hmac", "jwt"])
+def test_enabled_sessions_require_complete_configuration(missing: str) -> None:
+    from pydantic import ValidationError
+
+    values: dict[str, Any] = {
+        "database_url": "postgresql+asyncpg://user:password@localhost/mdm_test",
+        "auth_sessions_enabled": True,
+        "auth_allowed_origins": ("https://app.example.net",),
+        "auth_ip_hmac_secret": "A" * 43,
+        "auth_jwt_active_kid": "test-key",
+        "auth_jwt_private_key_path": "test-private.pem",
+        "auth_jwt_jwks_path": "test-public.json",
+    }
+    if missing == "origins":
+        values["auth_allowed_origins"] = ()
+    elif missing == "hmac":
+        values["auth_ip_hmac_secret"] = None
+    else:
+        values["auth_jwt_active_kid"] = None
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **values)
