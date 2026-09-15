@@ -176,3 +176,32 @@ def test_master_code_recomposition_preserves_references_and_tombstone() -> None:
     assert recomposed.updated_at == changed_at
     assert recomposed.deleted_at == tombstone.deleted_at
     assert recomposed.dimensions.company is changed_company
+
+
+def test_master_code_reference_update_replaces_slots_and_returns_noop_for_same_ids() -> None:
+    company = _dimension(1, "COM", CompanyValue("company"))
+    brand = _dimension(2, "BRA", BrandValue("brand"))
+    master_code = MasterCode.create(
+        id=UUID("00000000-0000-7000-8000-000000000009"),
+        dimensions=MasterCodeDimensions(company=company),
+        created_at=NOW,
+    )
+    changed_at = datetime(2026, 9, 10, 1, 23, 46, tzinfo=UTC)
+    changed_dimensions = MasterCodeDimensions(company=None, brand=brand)
+
+    changed = master_code.update_references(
+        dimensions=changed_dimensions,
+        changed_at=changed_at,
+    )
+
+    assert changed.code == "NNN-BRA-NNN-NNN-NNN-NNN-NNN-NNN"
+    assert changed.version == 2
+    assert changed.updated_at == changed_at
+    assert changed.dimensions == changed_dimensions
+    assert (
+        changed.update_references(
+            dimensions=changed_dimensions,
+            changed_at=changed_at,
+        )
+        is changed
+    )

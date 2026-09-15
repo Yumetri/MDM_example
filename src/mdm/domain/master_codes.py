@@ -226,3 +226,36 @@ class MasterCode:
             updated_at=changed_at,
             deleted_at=self.deleted_at,
         )
+
+    def update_references(
+        self,
+        *,
+        dimensions: MasterCodeDimensions,
+        changed_at: datetime,
+    ) -> "MasterCode":
+        """Return the next active state after an atomic reference replacement."""
+        if self.deleted_at is not None:
+            raise MasterCodeValidationError("deleted MasterCode references cannot be updated")
+        if not isinstance(dimensions, MasterCodeDimensions):
+            raise MasterCodeValidationError("dimensions are invalid")
+        current_ids = tuple(
+            None if dimension is None else dimension.id for dimension in self.dimensions.ordered()
+        )
+        next_ids = tuple(
+            None if dimension is None else dimension.id for dimension in dimensions.ordered()
+        )
+        if next_ids == current_ids:
+            return self
+        if changed_at.utcoffset() is None:
+            raise MasterCodeValidationError("changed_at must be timezone-aware")
+        if changed_at < self.updated_at:
+            raise MasterCodeValidationError("changed_at must not precede updated_at")
+        return MasterCode(
+            id=self.id,
+            dimensions=dimensions,
+            code=self.compose(dimensions),
+            version=self.version + 1,
+            created_at=self.created_at,
+            updated_at=changed_at,
+            deleted_at=None,
+        )

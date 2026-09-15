@@ -53,9 +53,12 @@ def configure_openapi(application: FastAPI) -> None:
         else:
             for item in example["items"]:
                 _restore_master_code_nulls(item)
-    detail = paths.get("/api/v1/master-codes/{master_code_id}", {}).get("get")
-    if detail is not None:
-        example = detail["responses"]["200"]["content"]["application/json"].get("example")
+    detail = paths.get("/api/v1/master-codes/{master_code_id}", {})
+    for method in ("get", "patch"):
+        operation = detail.get(method)
+        if operation is None:
+            continue
+        example = operation["responses"]["200"]["content"]["application/json"].get("example")
         if example is not None:
             _restore_master_code_nulls(example)
     application.openapi_schema = schema

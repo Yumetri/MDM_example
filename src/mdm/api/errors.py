@@ -123,12 +123,13 @@ async def dimension_validation_error_handler(request: Request, exc: Exception) -
 
 async def precondition_required_handler(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, PreconditionRequired)
+    resource = "MasterCode" if request.url.path.startswith("/api/v1/master-codes/") else "Dimension"
     return problem_response(
         ProblemDetails(
             type="/problems/precondition-required",
             title="사전 조건 필요",
             status=428,
-            detail="Dimension을 변경하려면 직전 단건 응답의 ETag를 If-Match로 제공해야 합니다.",
+            detail=f"{resource}를 변경하려면 직전 단건 응답의 ETag를 If-Match로 제공해야 합니다.",
             code="PRECONDITION_REQUIRED",
             instance=request.url.path,
         )
@@ -137,12 +138,18 @@ async def precondition_required_handler(request: Request, exc: Exception) -> JSO
 
 async def invalid_if_match_handler(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, InvalidIfMatch)
+    is_master_code = request.url.path.startswith("/api/v1/master-codes/")
     return problem_response(
         ProblemDetails(
             type="/problems/invalid-if-match",
             title="유효하지 않은 If-Match",
             status=400,
-            detail="If-Match에는 따옴표로 감싼 강한 정수 ETag 하나를 입력해야 합니다.",
+            detail=(
+                "If-Match에는 직전 MasterCode 응답에서 받은, 문서에 제시된 형식의 강한 "
+                "ETag 하나를 입력해야 합니다."
+                if is_master_code
+                else "If-Match에는 따옴표로 감싼 강한 정수 ETag 하나를 입력해야 합니다."
+            ),
             code="INVALID_IF_MATCH",
             instance=request.url.path,
         )
@@ -151,12 +158,18 @@ async def invalid_if_match_handler(request: Request, exc: Exception) -> JSONResp
 
 async def precondition_failed_handler(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, PreconditionFailed)
+    is_master_code = request.url.path.startswith("/api/v1/master-codes/")
     return problem_response(
         ProblemDetails(
             type="/problems/precondition-failed",
             title="사전 조건 불일치",
             status=412,
-            detail="Dimension이 조회 이후 변경되었습니다. 최신 상태와 ETag를 다시 조회해 주세요.",
+            detail=(
+                "MasterCode 또는 참조 Dimension이 조회 이후 변경되었습니다. 최신 상태와 "
+                "ETag를 다시 조회해 주세요."
+                if is_master_code
+                else "Dimension이 조회 이후 변경되었습니다. 최신 상태와 ETag를 다시 조회해 주세요."
+            ),
             code="PRECONDITION_FAILED",
             instance=request.url.path,
         )
