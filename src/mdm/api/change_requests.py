@@ -213,7 +213,13 @@ class RestoreChangeProposal(StrictInput):
         Field(description="CREATE 요청 대신 기존 삭제 행을 복원하는 관리자 적용안입니다."),
     ]
     target_id: Annotated[UUID, Field(description="복원할 삭제 MasterCode UUID입니다.")]
-    expected_etag: ExpectedEtag
+    expected_etag: Annotated[
+        ExpectedEtag,
+        Field(
+            description="복원할 삭제된 MasterCode 응답의 따옴표를 포함한 강한 ETag입니다. "
+            "승인 시 현재 상태와 일치하는지 검사합니다."
+        ),
+    ]
     payload: Annotated[
         RestoreProposalPayload, Field(description="대상 삭제 행과 정확히 같은 참조 조합입니다.")
     ]
@@ -237,7 +243,8 @@ class SubmitChangeRequestInput(StrictInput):
         StrictStr | None,
         Field(
             description=(
-                "요청자가 남기는 선택적 설명입니다. 앞뒤 일반 공백을 제외해 500자 "
+                "요청자가 남기는 선택적 설명입니다. 앞뒤 일반 공백을 제거해 저장하며 "
+                "빈 문자열과 공백만 있는 문자열은 null로 저장합니다. 정규화 후 500자 "
                 "이하이며 제어문자는 금지합니다. 관리자 감사 로그의 reason으로 "
                 "복사하지 않습니다."
             ),
@@ -311,7 +318,11 @@ class ChangeRequestResponse(BaseModel):
     ]
     requester_id: Annotated[UUID, Field(description="원본을 제출한 사용자의 UUID입니다.")]
     reason: Annotated[
-        str | None, Field(description="요청자가 제출한 원본 설명이며 없으면 null입니다.")
+        str | None,
+        Field(
+            description="요청자가 제출한 설명의 앞뒤 일반 공백을 제거한 값입니다. "
+            "설명이 없거나 빈 문자열 또는 공백만 제출했으면 null입니다."
+        ),
     ]
     created_at: Annotated[datetime, Field(description="원본 요청 접수 시각입니다.")]
     approved_proposal: Annotated[
@@ -667,8 +678,8 @@ def build_change_request_router(
         summary="관리자 변경 요청 상세",
         description=(
             "ADMIN·SUPER_ADMIN이 원본과 처리 결과를 검토합니다. 최신 "
-            "대상 상태와 ETag는 일반 MasterCode 단건 또는 관리자 "
-            "tombstone 조회로 확인합니다."
+            "대상 상태와 ETag는 일반 MasterCode 단건 조회 또는 관리자용 "
+            "삭제된 MasterCode 조회로 확인합니다."
         ),
         responses=_errors(f"{ADMIN_BASE}/{EXAMPLE_ID}", detail=True),
     )
@@ -689,8 +700,8 @@ def build_change_request_router(
             "ADMIN·SUPER_ADMIN이 요청을 잠근 뒤 "
             "Dimension·MasterCode·로그와 승인 결과를 함께 "
             "반영합니다. {}는 원안 승인입니다. 수정안은 원본과 자동 병합하지 "
-            "않으며 ETag만 바꿔도 메시지가 필요합니다. no-op은 409와 "
-            "PENDING 유지 후 별도 거절이 필요합니다. CREATE 대신 같은 "
+            "않으며 ETag만 바꿔도 메시지가 필요합니다. 적용할 변경이 없으면 "
+            "409를 반환하고 PENDING을 유지하며 별도 거절이 필요합니다. CREATE 대신 같은 "
             "참조 조합의 삭제 행을 RESTORE하는 변경만 operation·대상 "
             "변경의 예외입니다."
         ),

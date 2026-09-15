@@ -538,6 +538,11 @@ operation별 적용 기준 ETag, approver, 승인 사유 및 승인 시각을 �
 무시하지만 문자열의 대소문자나 공백을 바꾼 경우 정규화 결과가 같아도 수정으로 판단한다.
 이때 `MODIFIED_AND_APPROVED`와 필수 review_message 규칙을 적용한다.
 
+요청자가 선택적으로 적는 설명 `reason`은 접수 시 앞뒤 일반 공백을 제거한 값으로 저장한다.
+생략, `null`, 빈 문자열과 일반 공백만 있는 문자열은 SQL `NULL`로 저장한다. Unicode,
+대소문자와 내부 일반 공백은 보존하며 정규화 후 최대 500자까지 허용한다. 탭, 줄바꿈과
+제어문자는 거부한다. 접수 후 저장된 설명은 덮어쓰지 않는다.
+
 승인 API는 JSON 객체 본문을 받는다. `approved_proposal`을 생략하면 저장된 원안을 사용하고,
 `review_message`만 선택적으로 제공할 수 있다. 따라서 `{}`도 원안 승인 입력이다.
 `approved_proposal`을 제공하면 operation, 대상, expected ETag와 payload를 갖춘 완전한 적용안으로

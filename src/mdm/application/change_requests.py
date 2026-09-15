@@ -134,10 +134,10 @@ class ChangeRequestUseCases:
         self._authorization.authorize(principal, action)
         validate_proposal(proposal)
         try:
-            normalize_reason(reason)
+            normalized_reason = normalize_reason(reason)
         except AuditInvariantError as error:
             raise ChangeRequestValidationError("유효한 요청 사유를 입력해야 합니다.") from error
-        return await self._repository.submit(proposal, principal.user_id, reason)
+        return await self._repository.submit(proposal, principal.user_id, normalized_reason)
 
     async def get_own(self, principal: HumanPrincipal, request_id: UUID) -> ChangeRequest:
         self._authorization.authorize(principal, AuthorizationAction.READ_DATA)

@@ -93,3 +93,25 @@ async def test_submission_does_not_resolve_nonexistent_target_or_stale_etag() ->
         HumanPrincipal(USER_ID, UserRole.USER), proposal, reason=None
     )
     assert result.original.target_id == REQUEST_ID
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("  신규  제품 등록  ", "신규  제품 등록"),
+        ("", None),
+        ("   ", None),
+        (" " * 1000 + "가" * 500 + " " * 1000, "가" * 500),
+    ],
+    ids=["trim-edges-preserve-content", "empty", "spaces-only", "padded-length-boundary"],
+)
+async def test_submission_stores_normalized_reason(reason: str, expected: str | None) -> None:
+    repository = SubmissionRepository()
+    proposal = _proposal()
+    result = await _use_cases(repository).submit(
+        HumanPrincipal(USER_ID, UserRole.USER), proposal, reason=reason
+    )
+
+    assert repository.calls == [(proposal, USER_ID, expected)]
+    assert result.reason == expected
+    assert result.original == proposal

@@ -353,6 +353,46 @@ async def test_http_submit_review_and_owner_result_preserve_original(api_workflo
         assert await conn.scalar(text("SELECT code FROM dimension_companies")) == "A0"
 
 
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("  신규  제품 등록  ", "신규  제품 등록"),
+        ("   ", None),
+        (" " * 1000 + "가" * 500 + " " * 1000, "가" * 500),
+    ],
+    ids=["trim-edges-preserve-content", "spaces-only", "padded-length-boundary"],
+)
+async def test_http_reason_is_normalized_in_storage_and_queries(api_workflow, reason, expected):
+    client, headers, engine = api_workflow
+    payload = _inline_proposal().payload
+    assert payload is not None
+    original = {"operation": "CREATE", "payload": payload.to_dict()}
+    submitted = await client.post(
+        BASE, headers=headers["user"], json={"proposal": original, "reason": reason}
+    )
+    assert submitted.status_code == 201, submitted.text
+    identifier = submitted.json()["id"]
+
+    async with engine.connect() as conn:
+        stored = (
+            await conn.execute(
+                text("SELECT reason FROM master_code_change_requests WHERE id=:id"),
+                {"id": UUID(identifier)},
+            )
+        ).one()
+        assert stored.reason == expected
+    for base, actor in ((BASE, "user"), (ADMIN_BASE, "admin")):
+        detail = await client.get(f"{base}/{identifier}", headers=headers[actor])
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["reason"] == expected
+        assert detail.json()["original"]["payload"] == original["payload"]
+        listing = await client.get(base, headers=headers[actor])
+        assert listing.status_code == 200, listing.text
+        assert [(item["id"], item["reason"]) for item in listing.json()["items"]] == [
+            (identifier, expected)
+        ]
+
+
 async def test_http_authorization_and_visibility(api_workflow):
     client, headers, _ = api_workflow
     identifier = await _submit_http(client, headers)
