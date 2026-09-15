@@ -40,6 +40,8 @@ class JsonLineOperationalEventSink:
         }
         if event.request_id is not None:
             payload["request_id"] = event.request_id
+        if event.client_ip is not None:
+            payload["client_ip"] = str(event.client_ip)
         try:
             line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
             stream = self._stdout if self._destination == "stdout" else self._stderr
