@@ -4,6 +4,8 @@ from typing import Any
 
 from fastapi import FastAPI
 
+from mdm.api.audit_log_schemas import audit_log_success_examples
+
 
 def configure_openapi(application: FastAPI) -> None:
     """Ensure Problem Details responses advertise only their actual media type."""
@@ -81,6 +83,24 @@ def configure_openapi(application: FastAPI) -> None:
                 deleted_at = example.get("deleted_at")
                 _restore_master_code_nulls(example)
                 example["deleted_at"] = deleted_at
+    for path_item in paths.values():
+        for operation in path_item.values():
+            operation_id = operation.get("operationId", "")
+            if operation_id == "admin_get_change_set_logs":
+                source = None
+            elif operation_id == "admin_list_master_code_logs":
+                source = "MASTER_CODE"
+            elif operation_id.startswith("admin_list_") and operation_id.endswith(
+                "_dimension_logs"
+            ):
+                source = (
+                    operation_id.removeprefix("admin_list_").removesuffix("_dimension_logs").upper()
+                )
+            else:
+                continue
+            success = operation["responses"]["200"]
+            success["description"] = "검색 조건에 맞는 감사 로그 페이지입니다."
+            success["content"]["application/json"]["examples"] = audit_log_success_examples(source)
     application.openapi_schema = schema
 
 

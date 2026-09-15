@@ -440,6 +440,11 @@ MasterCodeLog에 삽입한다. 애플리케이션은 MasterCodeLog 행을 직접
 MasterCodeLog의 BEFORE UPDATE/DELETE 트리거는 기존 로그 변경과 삭제를 거부하며 MasterCode의
 BEFORE DELETE 트리거는 물리 삭제를 거부한다.
 
+### 12.5 감사 로그 조회의 공통 계약
+
+MasterCodeLog 조회의 필터, 페이지 응답, 커서, 빈 결과와 새 로그의 커밋에 대한 동작은
+`docs/domain/dimension-data-contract.md` 12.6절의 공통 조회 계약을 따른다.
+
 ## 13. 오류 계약
 
 모든 오류는 내부 SQL, 제약조건 이름과 기존 행 ID를 노출하지 않는 RFC 9457 Problem Details로
