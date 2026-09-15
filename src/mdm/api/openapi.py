@@ -40,6 +40,11 @@ def configure_openapi(application: FastAPI) -> None:
         for item in master_code_list["example"]["items"]:
             _restore_master_code_nulls(item)
     paths = schema.get("paths", {})
+    for path, path_item in paths.items():
+        if path.startswith("/api/v1/dimensions/") and path.endswith("/restore"):
+            path_item["post"]["responses"]["200"]["content"]["application/json"]["example"][
+                "deleted_at"
+            ] = None
     master_code_collection = paths.get("/api/v1/master-codes", {})
     for method, status in (("post", "201"), ("get", "200")):
         operation = master_code_collection.get(method)

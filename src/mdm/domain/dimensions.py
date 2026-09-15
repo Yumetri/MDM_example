@@ -243,6 +243,33 @@ class Dimension[ValueT]:
     def is_deleted(self) -> bool:
         return self.deleted_at is not None
 
+    def delete(self, *, changed_at: datetime) -> "Dimension[ValueT]":
+        """Preserve business values and enter the deleted state exactly once."""
+        if self.is_deleted:
+            raise DimensionValidationError("deleted_at", "이미 삭제된 Dimension입니다.")
+        return self._transition_deletion(deleted=True, changed_at=changed_at)
+
+    def restore(self, *, changed_at: datetime) -> "Dimension[ValueT]":
+        """Restore the same identity and stored values exactly once."""
+        if not self.is_deleted:
+            raise DimensionValidationError("deleted_at", "삭제되지 않은 Dimension입니다.")
+        return self._transition_deletion(deleted=False, changed_at=changed_at)
+
+    def _transition_deletion(self, *, deleted: bool, changed_at: datetime) -> "Dimension[ValueT]":
+        if changed_at.utcoffset() is None:
+            raise DimensionValidationError("updated_at", "시간대가 포함된 시각이어야 합니다.")
+        if changed_at < self.updated_at:
+            raise DimensionValidationError("updated_at", "현재 updated_at보다 빠를 수 없습니다.")
+        return Dimension(
+            id=self.id,
+            code=self.code,
+            value=self.value,
+            version=self.version + 1,
+            created_at=self.created_at,
+            updated_at=changed_at,
+            deleted_at=changed_at if deleted else None,
+        )
+
     def change_value(self, value: ValueT, *, changed_at: datetime) -> "Dimension[ValueT]":
         """Return the next immutable state for one logical value change."""
         return self.change(code=None, value=value, changed_at=changed_at)
