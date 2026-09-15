@@ -1,6 +1,7 @@
 import io
 import json
 from datetime import UTC, datetime
+from ipaddress import ip_address
 from typing import Literal
 
 import pytest
@@ -75,3 +76,21 @@ def test_operational_event_sink_never_propagates_output_failure() -> None:
             occurred_at=datetime(2033, 5, 18, 3, 33, 20, tzinfo=UTC),
         )
     )
+
+
+@pytest.mark.unit
+def test_verified_client_ip_is_serialized_as_an_address_only() -> None:
+    output = io.StringIO()
+    sink = JsonLineOperationalEventSink(destination="stderr", stderr=output)
+    sink.emit(
+        OperationalEvent(
+            name="CSRF_VALIDATION_FAILED",
+            occurred_at=datetime(2033, 5, 18, tzinfo=UTC),
+            client_ip=ip_address("2001:db8::1"),
+        )
+    )
+    assert json.loads(output.getvalue()) == {
+        "event": "CSRF_VALIDATION_FAILED",
+        "occurred_at": "2033-05-18T00:00:00Z",
+        "client_ip": "2001:db8::1",
+    }

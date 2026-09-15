@@ -7,7 +7,9 @@ from urllib.parse import urlsplit
 from pydantic import EmailStr, Field, HttpUrl, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from mdm.application.browser_policy import BrowserProtectionPolicy
 from mdm.infrastructure.network_values import normalize_network_host
+from mdm.infrastructure.request_protection import decode_ip_hmac_secret
 
 
 class Settings(BaseSettings):
@@ -18,6 +20,7 @@ class Settings(BaseSettings):
         env_prefix="MDM_",
         extra="ignore",
         frozen=True,
+        hide_input_in_errors=True,
     )
 
     database_url: SecretStr
@@ -29,6 +32,11 @@ class Settings(BaseSettings):
     auth_jwt_active_kid: str | None = None
     auth_jwt_private_key_path: Path | None = None
     auth_jwt_jwks_path: Path | None = None
+    auth_ip_hmac_secret: SecretStr | None = Field(default=None, repr=False)
+    auth_allowed_origins: tuple[str, ...] = ()
+    auth_allow_insecure_local_cookies: bool = False
+    auth_rate_limit_capacity: int = Field(default=100_000, ge=1)
+    auth_log_queue_capacity: int = Field(default=1024, ge=1)
     email_public_app_base_url: HttpUrl | None = None
     email_smtp_host: str | None = None
     email_smtp_port: int | None = Field(default=None, ge=1, le=65535)
@@ -37,6 +45,21 @@ class Settings(BaseSettings):
     email_smtp_password: SecretStr | None = Field(default=None, min_length=1)
     email_sender_address: EmailStr | None = None
     email_smtp_timeout_seconds: float = Field(default=10.0, gt=0, allow_inf_nan=False)
+
+    @field_validator("auth_ip_hmac_secret")
+    @classmethod
+    def validate_ip_hmac_secret(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None:
+            decode_ip_hmac_secret(value)
+        return value
+
+    @model_validator(mode="after")
+    def validate_auth_browser_policy(self) -> "Settings":
+        BrowserProtectionPolicy(
+            allowed_origins=self.auth_allowed_origins,
+            allow_insecure_local_cookies=self.auth_allow_insecure_local_cookies,
+        )
+        return self
 
     @field_validator("email_smtp_host")
     @classmethod

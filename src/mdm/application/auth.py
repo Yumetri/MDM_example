@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from ipaddress import IPv4Address, IPv6Address
 from typing import Literal, Never, Protocol
 from uuid import UUID
 
@@ -54,15 +55,31 @@ class HumanPrincipal:
     role: UserRole
 
 
+type OperationalEventName = Literal[
+    "INVALID_ACCESS_TOKEN",
+    "ORIGIN_VALIDATION_FAILED",
+    "CSRF_VALIDATION_FAILED",
+    "RATE_LIMIT_EXCEEDED",
+    "RATE_LIMIT_CAPACITY_EXCEEDED",
+    "CLIENT_IP_UNRESOLVED",
+]
+
+
 @dataclass(frozen=True, slots=True)
 class OperationalEvent:
     """A minimal, sanitized event envelope safe for operational output."""
 
-    name: Literal["INVALID_ACCESS_TOKEN"]
+    name: OperationalEventName
     occurred_at: datetime
     request_id: str | None = None
+    client_ip: IPv4Address | IPv6Address | None = None
 
     def __post_init__(self) -> None:
+        if self.client_ip is not None and (
+            not isinstance(self.client_ip, (IPv4Address, IPv6Address))
+            or (isinstance(self.client_ip, IPv6Address) and self.client_ip.scope_id is not None)
+        ):
+            raise ValueError("client IP must be a validated address without a scope identifier")
         if self.occurred_at.utcoffset() is None:
             raise ValueError("operational event timestamp must be timezone-aware")
         if self.request_id is not None and (

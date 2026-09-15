@@ -633,7 +633,8 @@ async def unexpected_error_handler(request: Request, exc: Exception) -> JSONResp
             detail="서비스에서 예상하지 못한 오류가 발생했습니다.",
             code="INTERNAL_ERROR",
             instance=request.url.path,
-        )
+        ),
+        headers={"Cache-Control": "no-store"} if request.scope.get("mdm.auth_no_store") else None,
     )
 
 
