@@ -1,3 +1,4 @@
+import json
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -5,16 +6,39 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from httpx import ASGITransport, AsyncClient
+from jwt.algorithms import RSAAlgorithm
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.test_company_api_persistence import ADMIN_ID, USER_ID, _write_key_files
 
 from mdm.domain.auth import UserRole
 from mdm.infrastructure.database import create_engine
 from mdm.infrastructure.jwt import build_access_jwt_codec
 from mdm.infrastructure.settings import Settings
 from mdm.main import create_app
+
+ADMIN_ID = UUID("01890f7c-8abc-7def-8abc-111111111111")
+USER_ID = UUID("01890f7c-8abc-7def-8abc-222222222222")
+
+
+def _write_key_files(directory: Path) -> tuple[Path, Path]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_path = directory / "jwt-private.pem"
+    private_path.write_bytes(
+        private_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    jwk = json.loads(RSAAlgorithm.to_jwk(private_key.public_key()))
+    jwk.update({"kid": "integration-key", "alg": "RS256", "use": "sig"})
+    jwks_path = directory / "jwt-public-keys.json"
+    jwks_path.write_text(json.dumps({"keys": [jwk]}), encoding="utf-8")
+    return private_path, jwks_path
+
 
 pytestmark = pytest.mark.integration
 CASES = [
@@ -327,11 +351,14 @@ async def test_dimension_delete_and_mastercode_creation_serialize_on_dimension_l
 ) -> None:
     import asyncio
 
-    from tests.integration.test_master_code_persistence import _audit, _company_reference_plan
-
     from mdm.application.dimension_lifecycle import DimensionInUse
-    from mdm.application.master_codes import InvalidDimensionReference
-    from mdm.domain.audit import DimensionOperation
+    from mdm.application.master_codes import (
+        ExistingDimension,
+        InvalidDimensionReference,
+        MasterCodeCreatePlan,
+        NotApplicable,
+    )
+    from mdm.domain.audit import DimensionOperation, MasterCodeOperation
     from mdm.infrastructure.audit_context import SqlAlchemyMutationAuditContextWriter
     from mdm.infrastructure.database import create_session_factory
     from mdm.infrastructure.repositories.dimension_lifecycle import (
@@ -376,7 +403,19 @@ async def test_dimension_delete_and_mastercode_creation_serialize_on_dimension_l
         return await lifecycle.delete(dimension_id, 1, _lifecycle_audit(DimensionOperation.DELETE))
 
     async def create():
-        return await master.create(_company_reference_plan(dimension_id), _audit(inline=False))
+        return await master.create(
+            MasterCodeCreatePlan(
+                company=ExistingDimension(dimension_id),
+                brand=NotApplicable(),
+                model=NotApplicable(),
+                category=NotApplicable(),
+                year=NotApplicable(),
+                memory=NotApplicable(),
+                network=NotApplicable(),
+                country=NotApplicable(),
+            ),
+            _lifecycle_audit(None, master_code_operation=MasterCodeOperation.CREATE),
+        )
 
     async def second():
         started.set()
@@ -421,13 +460,16 @@ async def test_dimension_delete_and_mastercode_creation_serialize_on_dimension_l
         assert (deleted is None) == creation_first
 
 
-def _lifecycle_audit(operation):
+def _lifecycle_audit(operation, *, master_code_operation=None):
     from mdm.application.audit import HumanMutationAuditFactory
     from mdm.application.auth import HumanPrincipal
     from mdm.infrastructure.uuid7 import Uuid7Generator
 
     return HumanMutationAuditFactory(change_set_ids=Uuid7Generator().new).create(
-        HumanPrincipal(ADMIN_ID, UserRole.ADMIN), dimension_operation=operation, reason="직접 검증"
+        HumanPrincipal(ADMIN_ID, UserRole.ADMIN),
+        dimension_operation=operation,
+        master_code_operation=master_code_operation,
+        reason="직접 검증",
     )
 
 
