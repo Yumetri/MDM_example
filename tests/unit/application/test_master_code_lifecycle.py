@@ -28,15 +28,15 @@ class RecordingLifecycle(MasterCodeLifecycleRepository):
         )
         self.calls: list[tuple[str, MutationAuditMetadata | None]] = []
 
-    async def get_tombstone(self, dimension_id):
+    async def get_tombstone(self, master_code_id):
         self.calls.append(("get", None))
         return self.dimension
 
-    async def delete(self, dimension_id, expected_etag, audit):
+    async def delete(self, master_code_id, expected_etag, audit):
         self.calls.append(("delete", audit))
         return self.dimension
 
-    async def restore(self, dimension_id, expected_etag, audit):
+    async def restore(self, master_code_id, expected_etag, audit):
         self.calls.append(("restore", audit))
         return self.dimension
 
