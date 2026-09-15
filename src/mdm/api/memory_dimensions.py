@@ -136,7 +136,8 @@ class MemoryValueUpdateRequest(BaseModel):
         Field(
             description=(
                 "새 amount·unit을 묶은 논리 값입니다. 현재 값과 동등한 capacity_mb이면 현재 "
-                "저장된 amount·unit 표현을 유지하고 상태를 변경하지 않습니다."
+                "저장된 amount·unit 표현을 유지합니다. code도 바뀌지 않으면 version·시각·감사 "
+                "로그를 변경하지 않습니다."
             )
         ),
     ] = None  # type: ignore[assignment]
