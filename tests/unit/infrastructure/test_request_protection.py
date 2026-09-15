@@ -111,3 +111,26 @@ def test_composition_requires_secret_and_provides_shared_protection_components()
     )
     assert isinstance(components.client_ips, UnresolvedClientIpResolver)
     assert components.cookies is not None
+
+
+@pytest.mark.unit
+def test_log_queue_capacity_has_a_bounded_default_and_supports_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MDM_AUTH_LOG_QUEUE_CAPACITY", raising=False)
+    assert (
+        Settings(_env_file=None, database_url="postgresql://local").auth_log_queue_capacity == 1024
+    )
+    monkeypatch.setenv("MDM_AUTH_LOG_QUEUE_CAPACITY", "7")
+    assert Settings(_env_file=None, database_url="postgresql://local").auth_log_queue_capacity == 7
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("capacity", [0, -1, 1.5])
+def test_log_queue_capacity_rejects_nonpositive_or_fractional_values(capacity: float) -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            database_url="postgresql://local",
+            auth_log_queue_capacity=capacity,
+        )

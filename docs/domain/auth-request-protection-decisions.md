@@ -90,6 +90,11 @@ CSRF 원본·digest는 서버에 저장하지 않고 두 raw 값 모두 commit �
 - composition root에서 `build_auth_protection(settings)`를 앱 생성 시 한 번 호출하고 반환된
   `AuthProtectionComponents`를 모든 인증 흐름에 공유한다. 요청마다 구성하면 공용 quota가
   초기화되므로 허용하지 않는다.
+- 반환된 `components.lifespan`을 `FastAPI(lifespan=components.lifespan)`에 연결한다.
+  기존 앱 lifespan이 있으면 그 안에서 `async with components.lifespan(app):`로 감싼다.
+  기본 로그 스레드는 이 범위에서만 동작한다. 같은 components는 한 번의 앱 lifespan에만
+  사용하고, 앱을 다시 시작할 때는 새로 구성한다. #37의 실제 API 연결 시 함께 적용한다.
+  직접 주입한 `event_sink`는 호출자가 수명을 관리하며 `emit`이 출력 I/O를 기다리지 않아야 한다.
 - API builder에 `components.router(AuthAction.LOGIN)` 등 해당 동작의 router를 주입한다.
   이 router는 본문 JSON 해석·FastAPI dependency 실행 전에 Origin·CSRF·quota를 검사한다.
   테스트 전용 probe는 production 앱에 등록하지 않는다.
@@ -118,3 +123,21 @@ CSRF 원본·digest는 서버에 저장하지 않고 두 raw 값 모두 commit �
 - 제목: `CSRF 검증 실패`
 - 설명: `유효한 CSRF cookie와 X-CSRF-Token header가 일치해야 합니다.`
 - 누락·중복·형식 오류·불일치는 모두 같은 응답을 사용하며 기존 cookie를 유지한다.
+
+## 운영 로그 출력 지연과 대기열
+
+PR #70 리뷰 검수에서 운영 로그의 출력 지연이 async API 처리를 막지 않도록 다음을 확정했다.
+
+- 인증 보호의 기본 운영 로그 출력은 크기가 제한된 메모리 대기열과 전용 출력 스레드 1개를
+  사용한다. 요청 처리는 이벤트를 대기열에 넣기만 하며 JSON 직렬화·write·flush를 기다리지 않는다.
+- `MDM_AUTH_LOG_QUEUE_CAPACITY`는 1 이상의 정수이며 기본값은 1,024건이다.
+  현재 출력 중인 1건은 대기열 용량과 별도다.
+- 대기열이 가득 차면 새 운영 로그를 버리고 API 처리를 계속한다. 출력 실패도 요청 결과를
+  바꾸지 않으며, 실패를 같은 출력 경로로 재기록하지 않는다.
+- 이 정책은 best-effort 운영 로그에만 적용한다. DB에 보존하는 감사 기록에는 적용하지 않는다.
+- 기본 스레드는 앱 시작 시 시작한다. 앱 종료 시 새 로그 접수를 중단하고 최대 1초 동안
+  대기 로그 출력을 기다린다. 종료 대기도 이벤트 루프를 막지 않는다. 기한 이후 남은 대기
+  로그는 버리며, 이미 출력 중인 1건은 강제로 중단할 수 없다. daemon 스레드로 두어 프로세스
+  종료 시 이 출력의 완료를 기다리지 않는다. 시작 전·종료 후 이벤트는 버린다.
+- #37에서 lifespan 연결을 적용하고, #34에서 실제 로그 수집·보존과 함께 용량 설정 및
+  출력 지연·종료 동작을 검증한다. 기존 두 후속 티켓이 OPEN임을 이번 리뷰 수정 시 재확인했다.

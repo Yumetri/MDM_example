@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     auth_allowed_origins: tuple[str, ...] = ()
     auth_allow_insecure_local_cookies: bool = False
     auth_rate_limit_capacity: int = Field(default=100_000, ge=1)
+    auth_log_queue_capacity: int = Field(default=1024, ge=1)
     email_public_app_base_url: HttpUrl | None = None
     email_smtp_host: str | None = None
     email_smtp_port: int | None = Field(default=None, ge=1, le=65535)
