@@ -9,6 +9,11 @@ from fastapi.exceptions import RequestValidationError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mdm.api.auth import build_human_principal_dependency
+from mdm.api.change_requests import (
+    CHANGE_REQUEST_ERRORS,
+    build_change_request_router,
+    change_request_error_handler,
+)
 from mdm.api.dimension_lifecycle import build_dimension_lifecycle_router
 from mdm.api.dimensions import build_company_router
 from mdm.api.documentation import build_documentation_router
@@ -57,6 +62,7 @@ from mdm.api.string_dimensions import (
 from mdm.application.audit import HumanMutationAuditFactory
 from mdm.application.auth import AuthenticateHumanPrincipal, InvalidAccessToken
 from mdm.application.authorization import AuthorizationDenied, AuthorizationPolicy
+from mdm.application.change_requests import ChangeRequestUseCases
 from mdm.application.dimension_lifecycle import (
     DeleteDimension,
     DimensionInUse,
@@ -154,6 +160,7 @@ from mdm.infrastructure.database import (
 )
 from mdm.infrastructure.jwt import RejectingAccessTokenVerifier, build_access_jwt_codec
 from mdm.infrastructure.operational_events import JsonLineOperationalEventSink
+from mdm.infrastructure.repositories.change_requests import SqlAlchemyChangeRequestRepository
 from mdm.infrastructure.repositories.companies import SqlAlchemyCompanyRepository
 from mdm.infrastructure.repositories.dimension_lifecycle import (
     SqlAlchemyBrandLifecycleRepository,
@@ -189,6 +196,7 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
     string_dimension_routers = []
     numeric_dimension_routers = []
     memory_router = None
+    change_request_router = None
     master_code_router = None
     master_code_lifecycle_router = None
     if readiness_check is None:
@@ -372,6 +380,13 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
                 authorization=authorization,
             )
         )
+        change_request_router = build_change_request_router(
+            use_cases=ChangeRequestUseCases(
+                SqlAlchemyChangeRequestRepository(session_factory), authorization, audit_factory
+            ),
+            principal_dependency=principal_dependency,
+            authorization=authorization,
+        )
         master_code_repository = SqlAlchemyMasterCodeRepository(session_factory)
         master_code_lifecycle_router = build_master_code_lifecycle_router(
             get_tombstone=GetMasterCodeTombstone(master_code_repository, authorization),
@@ -490,6 +505,8 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         DimensionValidationError,
         dimension_validation_error_handler,
     )
+    for error_type in CHANGE_REQUEST_ERRORS:
+        application.add_exception_handler(error_type, change_request_error_handler)
     application.add_exception_handler(PreconditionRequired, precondition_required_handler)
     application.add_exception_handler(InvalidIfMatch, invalid_if_match_handler)
     application.add_exception_handler(PreconditionFailed, precondition_failed_handler)
@@ -581,6 +598,8 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         application.include_router(memory_router)
     if master_code_lifecycle_router is not None:
         application.include_router(master_code_lifecycle_router)
+    if change_request_router is not None:
+        application.include_router(change_request_router)
     if master_code_router is not None:
         application.include_router(master_code_router)
     application.include_router(build_documentation_router(application))

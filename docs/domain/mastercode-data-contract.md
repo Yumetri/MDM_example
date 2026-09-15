@@ -457,6 +457,11 @@ BEFORE DELETE 트리거는 물리 삭제를 거부한다.
 | 같은 참조 조합 또는 합성 code 중복 | 409 | `MASTER_CODE_CONFLICT` |
 | 복원 중 non-null Dimension 참조가 삭제 상태 | 409 | `MASTER_CODE_REFERENCE_INACTIVE` |
 | 활성 MasterCode 복원 | 409 | `MASTER_CODE_NOT_DELETED` |
+| 승인 적용안에 실제 변경이 없음 | 409 | `CHANGE_REQUEST_NO_EFFECT` |
+| 없거나 본인에게 보이지 않는 변경 요청 | 404 | `CHANGE_REQUEST_NOT_FOUND` |
+| 최종 처리된 변경 요청 재검토 | 409 | `CHANGE_REQUEST_ALREADY_REVIEWED` |
+| 승인 대상의 현재 ETag와 적용 기준 ETag 불일치 | 409 | `CHANGE_REQUEST_STALE_TARGET` |
+| RESTORE 적용안과 대상 삭제 행의 참조 조합 불일치 | 409 | `CHANGE_REQUEST_RESTORE_MISMATCH` |
 | If-Match 불일치 | 412 | `PRECONDITION_FAILED` |
 | 타입·형식·필수 필드 위반 | 422 | `VALIDATION_ERROR` |
 | If-Match 누락 | 428 | `PRECONDITION_REQUIRED` |
@@ -526,8 +531,34 @@ Dimension code 변경으로 발생하는 `RECOMPOSE`는 별도 승인 대상이 
 operation별 적용 기준 ETag, approver, 승인 사유 및 승인 시각을 별도 필드로 보존한다.
 승인·거절된 요청을 다시 변경하거나 재처리할 수 없다.
 
+원본 payload는 검증을 통과한 입력의 JSON 값을 보존하며 code·value 문자열을 정규화한 값으로
+덮어쓰지 않는다. 검증과 실제 적용에는 기존 Dimension 정규화 규칙을 사용한다. 원안 승인 시
+자동 정규화는 관리자 수정으로 취급하지 않는다. 관리자가 명시한 승인 적용안과 원본의 비교는
+정규화 전 JSON 값, operation, 대상과 expected ETag를 기준으로 한다. JSON 객체의 키 순서는
+무시하지만 문자열의 대소문자나 공백을 바꾼 경우 정규화 결과가 같아도 수정으로 판단한다.
+이때 `MODIFIED_AND_APPROVED`와 필수 review_message 규칙을 적용한다.
+
+승인 API는 JSON 객체 본문을 받는다. `approved_proposal`을 생략하면 저장된 원안을 사용하고,
+`review_message`만 선택적으로 제공할 수 있다. 따라서 `{}`도 원안 승인 입력이다.
+`approved_proposal`을 제공하면 operation, 대상, expected ETag와 payload를 갖춘 완전한 적용안으로
+검토하며 원본과 필드별로 자동 병합하지 않는다. 단, `REFERENCE_UPDATE` payload의 Dimension
+입력은 변경할 자리만 포함하고 생략한 자리는 현재 참조를 유지하는 기존 규칙을 따른다.
+
 사용자가 제출할 수 있는 operation은 `CREATE`, `REFERENCE_UPDATE`, `DELETE`이다. 일반 사용자는
 `RESTORE` 요청을 제출하지 않으며 관리자가 직접 복원한다.
+
+제출 시에는 필수 필드, 입력 타입, Dimension code·value 규칙과 expected ETag 형식만 검증한다.
+대상 MasterCode와 참조 Dimension의 존재·활성 상태, 유일성 충돌과 현재 ETag 일치 여부는 제출을
+거부하는 조건으로 사용하지 않는다. 입력 규칙을 만족하면 `PENDING`으로 접수하며 MasterCode나
+Dimension을 변경하지 않는다. 실제 DB 상태와 적용 가능 여부는 승인 트랜잭션에서 잠금 후
+검증한다. 제출 당시 이미 중복되거나 참조가 삭제된 요청도 관리자가 수정 승인하거나 거절할 수
+있다.
+
+본인 요청의 목록·상세 조회는 현재 역할이 USER, ADMIN 또는 SUPER_ADMIN인 인증된 요청자에게
+허용한다. USER 시절 제출한 요청은 승격 후에도 본인 조회 API로 읽을 수 있다. 다른 요청자의
+요청은 본인 조회 API에서 존재 여부를 숨기는 404로 처리한다. 새 요청 제출은 USER만 허용한다.
+승격 후에는 본인이 USER 시절 제출한 요청도 승인·거절할 수 있다. 요청자와 검토자를 각각
+기록하며 두 식별자가 같다는 이유로 검토를 금지하지 않는다.
 
 - 원본 `CREATE`는 대상 MasterCode와 expected ETag가 모두 SQL `NULL`이어야 한다.
 - 원본 `REFERENCE_UPDATE`와 `DELETE`는 대상 MasterCode ID와 제출 당시 expected ETag가 필수이다.
@@ -541,6 +572,11 @@ operation별 적용 기준 ETag, approver, 승인 사유 및 승인 시각을 �
 없던 원본 요청은 그대로 보존하고, approved operation `RESTORE`와 복원한 MasterCode ID를 별도로
 기록하며 상태를 `MODIFIED_AND_APPROVED`로 만든다. 그 밖에 operation 또는 대상 변경이 필요하면
 기존 요청을 거절하고 별도의 작업으로 처리한다.
+
+`RESTORE` 승인 적용안에는 대상 MasterCode ID, expected ETag와 8개 자리의 `REFERENCE` 또는
+`NOT_APPLICABLE`을 모두 명시한다. `CREATE` mode와 자리 생략은 허용하지 않는다. 승인 시 잠금
+후 명시한 참조 조합이 대상 삭제 행의 참조 조합과 정확히 같은지 검사한다. 복원 적용안에서
+참조를 변경하거나 신규 Dimension을 생성하지 않는다.
 
 `REFERENCE_UPDATE` 또는 `DELETE`의 제출 당시 expected ETag와 검토 시점의 MasterCode ETag가
 다르더라도 요청을 자동으로 종료하지 않는다. 관리자는 원본 요청, 현재 MasterCode 상태와 실제
@@ -583,9 +619,12 @@ payload를 최신 상태에 자동으로 적용하지 않는다.
 
 승인 적용안이 현재 상태와 같아 실제 변경이 없으면 승인하지 않는다. 같은 활성 MasterCode가 이미
 있는 생성 요청, 최종 참조가 현재 참조와 같은 수정 요청과 이미 삭제된 대상의 삭제 요청은
-관리자가 현재 상태를 설명하는 review_message와 함께 `REJECTED` 처리한다. 이 경우
-applied_change_set_id, 데이터 변경과 감사 로그는 만들지 않는다. 논리 삭제된 기존 MasterCode를
-복원하는 생성 요청은 실제 상태 변경이 있으므로 이 no-op 규칙에 해당하지 않는다.
+승인 API에서 `409 CHANGE_REQUEST_NO_EFFECT`를 반환하고 `PENDING`으로 유지한다. 이 동작은
+승인 요청의 review_message 유무와 관계없이 적용하며 자동으로 거절 상태로 바꾸지 않는다.
+관리자는 현재 상태를 설명하는 review_message를 작성해 별도 거절 API로 `REJECTED` 처리한다.
+no-op 승인 시도와 이후 거절 모두 applied_change_set_id, 데이터 변경과 감사 로그를 만들지
+않는다. 논리 삭제된 기존 MasterCode를 복원하는 생성 요청은 실제 상태 변경이 있으므로 이
+no-op 규칙에 해당하지 않는다.
 
 이메일, 푸시 또는 외부 메시지 같은 알림 전송은 현재 범위에 포함하지 않는다. 현재는 요청자가
 상태 조회로 처리 결과와 관리자 메시지를 확인하며, 능동 알림은 별도 후속 요구사항으로 검토한다.
@@ -702,7 +741,7 @@ MasterCodeLog 테이블의 초기 인덱스는 다음과 같다.
 | --- | --- |
 | 하나 이상의 참조 교체 | code 재합성, version 정확히 1 증가, 로그 한 행 |
 | `CREATE` mode를 포함한 참조 수정 승인 | Dimension·로그·MasterCode·로그를 한 트랜잭션에서 생성·변경 |
-| 최종 참조가 현재 상태와 같음 | 직접 변경은 no-op, 사용자 요청 승인은 메시지와 함께 `REJECTED` |
+| 최종 참조가 현재 상태와 같음 | 직접 변경은 no-op, 사용자 요청 승인은 409 `CHANGE_REQUEST_NO_EFFECT`와 `PENDING` 유지 후 메시지를 포함한 별도 거절 |
 | Dimension value 변경 뒤 예전 ETag로 수정 | 412, 변경과 로그 없음 |
 | USER의 tombstone 조회 또는 직접 복원 | 403 `AUTHORIZATION_DENIED`, 상태 변화 없음 |
 | MasterCode 삭제 | 참조·code 보존, deleted_at 설정, version 1 증가 |
