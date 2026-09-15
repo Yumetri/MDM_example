@@ -183,14 +183,14 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
         "message": "현재 서비스 상태를 설명하는 사용자용 메시지입니다.",
     }
     assert schemas["FieldViolation"]["description"] == (
-        "입력값 검증에 실패한 필드 하나에 대한 정보입니다."
+        "입력값 또는 기존 참조의 검증에 실패한 필드 하나에 대한 정보입니다."
     )
     assert {
         name: field["description"]
         for name, field in schemas["FieldViolation"]["properties"].items()
     } == {
-        "field": "유효하지 않은 입력값의 위치입니다.",
-        "message": "입력값 검증 실패 원인을 설명하는 사용자용 메시지입니다.",
+        "field": "유효하지 않은 입력값의 위치 또는 기존 참조의 식별자입니다.",
+        "message": "입력값 또는 기존 참조의 검증 실패 원인을 설명하는 사용자용 메시지입니다.",
     }
     assert schemas["ProblemDetails"]["description"] == (
         "안정적인 서비스 오류 코드를 추가한 RFC 9457 Problem Details입니다."
@@ -386,3 +386,33 @@ def test_dimension_lifecycle_openapi_preserves_required_body_and_typed_states(na
         assert (value_schema["minimum"], value_schema["maximum"]) == (1, 5)
     elif name == "Memory":
         assert value_schema["$ref"] == "#/components/schemas/MemoryValueResponse"
+
+
+@pytest.mark.api
+def test_master_code_lifecycle_documents_required_body_state_and_aggregate_etag():
+    schema = app.openapi()
+    paths = schema["paths"]
+    for action, method, operation_id, model in (
+        ("delete", "post", "delete_master_code", "MasterCodeTombstoneResponse"),
+        ("tombstone", "get", "get_master_code_tombstone", "MasterCodeTombstoneResponse"),
+        ("restore", "post", "restore_master_code", "MasterCodeResponse"),
+    ):
+        operation = paths[f"/api/v1/master-codes/{{master_code_id}}/{action}"][method]
+        assert operation["operationId"] == operation_id
+        response = operation["responses"]["200"]
+        assert response["content"]["application/json"]["schema"]["$ref"].endswith(model)
+        assert "ETag" in response["headers"]
+        example = response["content"]["application/json"]["example"]
+        assert "deleted_at" in example
+        assert (example["deleted_at"] is None) == (action == "restore")
+        assert len(example["dimensions"]) == 8
+        assert {"401", "403", "404", "422", "503"} <= operation["responses"].keys()
+        if method == "post":
+            assert operation["requestBody"]["required"] is True
+            assert {"400", "412", "428"} <= operation["responses"].keys()
+            assert any(p["name"] == "If-Match" and p["required"] for p in operation["parameters"])
+        if action != "delete":
+            assert "409" in operation["responses"]
+    request = schema["components"]["schemas"]["MasterCodeLifecycleRequest"]
+    assert request["additionalProperties"] is False
+    assert set(request["properties"]) == {"reason"}

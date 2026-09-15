@@ -35,16 +35,19 @@ class HealthResponse(BaseModel):
 
 
 class FieldViolation(BaseModel):
-    """입력값 검증에 실패한 필드 하나에 대한 정보입니다."""
+    """입력값 또는 기존 참조의 검증에 실패한 필드 하나에 대한 정보입니다."""
 
     field: Annotated[
         str,
-        Field(description="유효하지 않은 입력값의 위치입니다.", examples=["body.code"]),
+        Field(
+            description="유효하지 않은 입력값의 위치 또는 기존 참조의 식별자입니다.",
+            examples=["body.code"],
+        ),
     ]
     message: Annotated[
         str,
         Field(
-            description="입력값 검증 실패 원인을 설명하는 사용자용 메시지입니다.",
+            description="입력값 또는 기존 참조의 검증 실패 원인을 설명하는 사용자용 메시지입니다.",
             examples=["필수 필드입니다."],
         ),
     ]

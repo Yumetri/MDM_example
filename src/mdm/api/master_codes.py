@@ -1076,7 +1076,7 @@ def _not_found_response() -> dict[str, Any]:
             "type": "/problems/master-code-not-found",
             "title": "MasterCode를 찾을 수 없음",
             "status": 404,
-            "detail": "요청한 활성 MasterCode를 찾을 수 없습니다.",
+            "detail": "요청한 MasterCode를 찾을 수 없습니다.",
             "code": "MASTER_CODE_NOT_FOUND",
             "instance": "/api/v1/master-codes/01890f7c-8abc-7def-8abc-222222222222",
         },

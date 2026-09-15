@@ -24,6 +24,7 @@ from mdm.application.dimensions import (
     CompanyValueConflict,
 )
 from mdm.application.health import ReadinessUnavailable
+from mdm.application.master_code_lifecycle import MasterCodeNotDeleted, MasterCodeReferenceInactive
 from mdm.application.master_codes import (
     InlineDimensionConflict,
     InvalidDimensionReference,
@@ -498,7 +499,7 @@ async def master_code_not_found_handler(request: Request, exc: Exception) -> JSO
             type="/problems/master-code-not-found",
             title="MasterCode를 찾을 수 없음",
             status=404,
-            detail="요청한 활성 MasterCode를 찾을 수 없습니다.",
+            detail="요청한 MasterCode를 찾을 수 없습니다.",
             code="MASTER_CODE_NOT_FOUND",
             instance=request.url.path,
         )
@@ -684,5 +685,33 @@ def dimension_lifecycle_error_handler(request: Request, exc: Exception) -> JSONR
             detail=detail,
             type="/problems/" + code.lower().replace("_", "-"),
             instance=request.url.path,
+        )
+    )
+
+
+async def master_code_lifecycle_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, (MasterCodeNotDeleted, MasterCodeReferenceInactive))
+    if isinstance(exc, MasterCodeReferenceInactive):
+        code = "MASTER_CODE_REFERENCE_INACTIVE"
+        title = "복원할 수 없는 MasterCode 참조"
+        detail = "삭제된 Dimension 참조가 있어 MasterCode를 복원할 수 없습니다."
+        violations = [
+            FieldViolation(field=field, message="삭제된 Dimension 참조입니다.")
+            for field in exc.fields
+        ]
+    else:
+        code = "MASTER_CODE_NOT_DELETED"
+        title = "삭제되지 않은 MasterCode"
+        detail = "요청한 MasterCode가 삭제 상태가 아닙니다."
+        violations = None
+    return problem_response(
+        ProblemDetails(
+            type="/problems/" + code.lower().replace("_", "-"),
+            title=title,
+            status=409,
+            detail=detail,
+            code=code,
+            instance=request.url.path,
+            violations=violations,
         )
     )

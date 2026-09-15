@@ -239,6 +239,23 @@ code로 새 행을 생성할 수 없으며 기존 행을 복원해야 한다. �
 MasterCode는 물리 삭제하지 않고 `deleted_at`을 사용하는 논리 삭제와 명시적인 복원을 지원한다.
 삭제와 복원은 참조 수정과 같은 강한 `If-Match` 계약을 사용한다.
 
+### 10.1 HTTP 요청과 성공 응답
+
+- 삭제: `POST /api/v1/master-codes/{id}/delete`
+- 복원: `POST /api/v1/master-codes/{id}/restore`
+- 두 요청 모두 JSON 객체 본문이 필수이며, 사유가 없으면 `{}`를 전송한다.
+- 허용 필드는 선택적 `reason`뿐이다. 생략 또는 `null`은 사유 없음으로 처리하며 기존 감사
+  사유의 정규화, 길이 및 제어문자 검증을 적용한다.
+- 본문 생략, JSON `null`, 객체가 아닌 본문과 추가 필드는 `422 VALIDATION_ERROR`이다.
+- 삭제 성공은 `200 OK`, 삭제 완료 후 MasterCode 상태와 삭제 시각인 `deleted_at`, 해당
+  상태의 강한 `ETag`를 반환한다.
+- 복원 성공은 `200 OK`, 기존 단건 조회와 같은 복원 후 활성 상태(`deleted_at: null`)와
+  해당 상태의 강한 `ETag`를 반환한다.
+- 삭제 응답 또는 tombstone 조회에서 얻은 ETag로 복원할 수 있다. 조회 이후 상태가 달라지면
+  기존 조건부 요청 계약대로 `412 PRECONDITION_FAILED`로 거부한다.
+
+### 10.2 상태 전이와 tombstone 조회
+
 삭제할 때 현재 참조 Dimension과 MasterCode 행을 전역 순서로 잠그고 전체 ETag를 검사한 뒤 다음
 상태를 한 트랜잭션에서 반영한다.
 
