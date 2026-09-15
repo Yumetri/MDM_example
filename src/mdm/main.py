@@ -24,6 +24,7 @@ from mdm.api.errors import (
     invalid_dimension_reference_handler,
     invalid_if_match_handler,
     master_code_conflict_handler,
+    master_code_lifecycle_error_handler,
     master_code_not_found_handler,
     master_code_repository_unavailable_handler,
     memory_dimension_conflict_handler,
@@ -42,6 +43,7 @@ from mdm.api.errors import (
     validation_error_handler,
 )
 from mdm.api.health import build_health_router
+from mdm.api.master_code_lifecycle import build_master_code_lifecycle_router
 from mdm.api.master_codes import build_master_code_router
 from mdm.api.memory_dimensions import build_memory_router
 from mdm.api.numeric_dimensions import build_network_router, build_year_router
@@ -76,6 +78,13 @@ from mdm.application.dimensions import (
     UpdateCompanyValue,
 )
 from mdm.application.health import CheckReadiness, ReadinessCheck, ReadinessUnavailable
+from mdm.application.master_code_lifecycle import (
+    DeleteMasterCode,
+    GetMasterCodeTombstone,
+    MasterCodeNotDeleted,
+    MasterCodeReferenceInactive,
+    RestoreMasterCode,
+)
 from mdm.application.master_codes import (
     CreateMasterCode,
     GetMasterCode,
@@ -181,6 +190,7 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
     numeric_dimension_routers = []
     memory_router = None
     master_code_router = None
+    master_code_lifecycle_router = None
     if readiness_check is None:
         settings = Settings()
         engine = create_engine(settings.reveal_database_url())
@@ -363,6 +373,13 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
             )
         )
         master_code_repository = SqlAlchemyMasterCodeRepository(session_factory)
+        master_code_lifecycle_router = build_master_code_lifecycle_router(
+            get_tombstone=GetMasterCodeTombstone(master_code_repository, authorization),
+            delete=DeleteMasterCode(master_code_repository, authorization, audit_factory),
+            restore=RestoreMasterCode(master_code_repository, authorization, audit_factory),
+            principal_dependency=principal_dependency,
+            authorization=authorization,
+        )
         master_code_router = build_master_code_router(
             create_master_code=CreateMasterCode(
                 master_code_repository,
@@ -519,6 +536,8 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         MemoryDimensionMultipleConflicts,
     ):
         application.add_exception_handler(conflict_type, memory_dimension_conflict_handler)
+    for error_type in (MasterCodeNotDeleted, MasterCodeReferenceInactive):
+        application.add_exception_handler(error_type, master_code_lifecycle_error_handler)
     application.add_exception_handler(MasterCodeNotFound, master_code_not_found_handler)
     application.add_exception_handler(
         MasterCodeRepositoryUnavailable,
@@ -560,6 +579,8 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         application.include_router(router)
     if memory_router is not None:
         application.include_router(memory_router)
+    if master_code_lifecycle_router is not None:
+        application.include_router(master_code_lifecycle_router)
     if master_code_router is not None:
         application.include_router(master_code_router)
     application.include_router(build_documentation_router(application))

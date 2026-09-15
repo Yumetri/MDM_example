@@ -66,6 +66,21 @@ def configure_openapi(application: FastAPI) -> None:
         example = operation["responses"]["200"]["content"]["application/json"].get("example")
         if example is not None:
             _restore_master_code_nulls(example)
+    tombstone = schemas.get("MasterCodeTombstoneResponse")
+    if tombstone is not None:
+        example = tombstone["example"]
+        deleted_at = example["deleted_at"]
+        _restore_master_code_nulls(example)
+        example["deleted_at"] = deleted_at
+    for path, path_item in paths.items():
+        if path.startswith("/api/v1/master-codes/") and path.endswith(
+            ("/tombstone", "/delete", "/restore")
+        ):
+            for operation in path_item.values():
+                example = operation["responses"]["200"]["content"]["application/json"]["example"]
+                deleted_at = example.get("deleted_at")
+                _restore_master_code_nulls(example)
+                example["deleted_at"] = deleted_at
     application.openapi_schema = schema
 
 

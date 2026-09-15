@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from datetime import datetime
 from typing import ClassVar
 from uuid import UUID
@@ -259,3 +259,29 @@ class MasterCode:
             updated_at=changed_at,
             deleted_at=None,
         )
+
+    def delete(self, *, changed_at: datetime) -> "MasterCode":
+        """Preserve all references and code while recording one deletion."""
+        if self.deleted_at is not None:
+            raise MasterCodeValidationError("MasterCode is already deleted")
+        self._validate_lifecycle_timestamp(changed_at)
+        return replace(self, deleted_at=changed_at, updated_at=changed_at, version=self.version + 1)
+
+    def restore(self, *, changed_at: datetime) -> "MasterCode":
+        """Restore using the current references and the canonical composition method."""
+        if self.deleted_at is None:
+            raise MasterCodeValidationError("MasterCode is not deleted")
+        self._validate_lifecycle_timestamp(changed_at)
+        return replace(
+            self,
+            code=self.compose(self.dimensions),
+            deleted_at=None,
+            updated_at=changed_at,
+            version=self.version + 1,
+        )
+
+    def _validate_lifecycle_timestamp(self, changed_at: datetime) -> None:
+        if changed_at.utcoffset() is None:
+            raise MasterCodeValidationError("changed_at must be timezone-aware")
+        if changed_at < self.updated_at:
+            raise MasterCodeValidationError("changed_at must not precede updated_at")

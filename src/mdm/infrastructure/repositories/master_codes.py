@@ -17,6 +17,7 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mdm.application.audit import MutationAuditContextUnavailable
+from mdm.application.master_code_lifecycle import MasterCodeNotDeleted, MasterCodeReferenceInactive
 from mdm.application.master_codes import (
     ExistingDimension,
     InlineDimension,
@@ -211,6 +212,113 @@ class SqlAlchemyMasterCodeRepository:
         if row is None:
             raise MasterCodeNotFound
         return _joined_to_domain(row)
+
+    async def get_tombstone(self, master_code_id: UUID) -> MasterCode:
+        try:
+            async with self._session_factory() as session:
+                row = (
+                    await session.execute(
+                        _joined_statement().where(MasterCodeRecord.id == master_code_id)
+                    )
+                ).one_or_none()
+        except SQLAlchemyError as error:
+            _raise_if_temporarily_unavailable(error)
+            raise
+        if row is None:
+            raise MasterCodeNotFound
+        current = _joined_to_domain(row)
+        if current.deleted_at is None:
+            raise MasterCodeNotDeleted
+        return current
+
+    async def delete(
+        self, master_code_id: UUID, expected_etag: str, audit: MutationAuditMetadata
+    ) -> MasterCode:
+        return await self._change_lifecycle(master_code_id, expected_etag, audit, restore=False)
+
+    async def restore(
+        self, master_code_id: UUID, expected_etag: str, audit: MutationAuditMetadata
+    ) -> MasterCode:
+        return await self._change_lifecycle(master_code_id, expected_etag, audit, restore=True)
+
+    async def _change_lifecycle(
+        self,
+        master_code_id: UUID,
+        expected_etag: str,
+        audit: MutationAuditMetadata,
+        *,
+        restore: bool,
+    ) -> MasterCode:
+        try:
+            async with self._session_factory.begin() as session:
+                initial_row = (
+                    await session.execute(
+                        _joined_statement().where(MasterCodeRecord.id == master_code_id)
+                    )
+                ).one_or_none()
+                if initial_row is None:
+                    raise MasterCodeNotFound
+                initial = _joined_to_domain(initial_row)
+                if restore and initial.deleted_at is None:
+                    raise MasterCodeNotDeleted
+                if not restore and initial.deleted_at is not None:
+                    raise MasterCodeNotFound
+
+                # Include deleted references: their current versions participate in the ETag.
+                locked: dict[str, MasterCodeDimension | None] = {}
+                for slot in MasterCodeDimensions.ORDER:
+                    reference = getattr(initial.dimensions, slot)
+                    if reference is None:
+                        locked[slot] = None
+                        continue
+                    config = _SLOTS[slot]
+                    dimension = await session.scalar(
+                        select(config.record_type)
+                        .where(config.record_type.id == reference.id)
+                        .with_for_update(read=True)
+                        .execution_options(populate_existing=True)
+                    )
+                    if dimension is None:
+                        raise PreconditionFailed
+                    locked[slot] = config.to_domain(dimension)
+
+                record = await session.scalar(
+                    select(MasterCodeRecord)
+                    .where(MasterCodeRecord.id == master_code_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                if record is None or not _same_persisted_state(record, initial):
+                    raise PreconditionFailed
+                current = _master_code(record, MasterCodeDimensions(**locked))
+                if current.etag() != expected_etag:
+                    raise PreconditionFailed
+                inactive = tuple(
+                    f"{slot}_id"
+                    for slot, dimension in locked.items()
+                    if dimension is not None and dimension.is_deleted
+                )
+                if restore and inactive:
+                    raise MasterCodeReferenceInactive(inactive)
+                timestamp = await SqlAlchemyMutationAuditContextWriter(session).set_context(
+                    audit, minimum_timestamp=current.updated_at
+                )
+                updated = (
+                    current.restore(changed_at=timestamp)
+                    if restore
+                    else current.delete(changed_at=timestamp)
+                )
+                record.code = updated.code
+                record.deleted_at = updated.deleted_at
+                record.updated_at = updated.updated_at
+                record.version = updated.version
+                await session.flush()
+                return updated
+        except MutationAuditContextUnavailable:
+            raise MasterCodeRepositoryUnavailable from None
+        except SQLAlchemyError as error:
+            _raise_if_temporarily_unavailable(error)
+            raise
 
     async def list_active(
         self,
