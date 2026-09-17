@@ -17,6 +17,19 @@ def configure_openapi(application: FastAPI) -> None:
                 if "application/problem+json" in content:
                     content.pop("application/json", None)
     schemas = schema.get("components", {}).get("schemas", {})
+    role_schema = schemas.get("UserRole")
+    if role_schema is not None:
+        role_schema["description"] = (
+            "사용자가 가진 단일 역할입니다. USER는 일반 사용자, ADMIN은 관리자, "
+            "SUPER_ADMIN은 최상위 관리자입니다. 작업별 허용 범위는 각 API 설명을 따릅니다."
+        )
+    status_schema = schemas.get("UserStatus")
+    if status_schema is not None:
+        status_schema["description"] = (
+            "ACTIVE는 로그인·세션 갱신이 가능한 상태이고 DISABLED는 신규 로그인·세션 갱신이 "
+            "차단된 상태입니다. 비활성화 전에 발급된 액세스 JWT는 발급 후 최대 15분 30초까지 "
+            "유효할 수 있습니다."
+        )
     for name in (
         "Company",
         "Model",
@@ -86,6 +99,15 @@ def configure_openapi(application: FastAPI) -> None:
     for path_item in paths.values():
         for operation in path_item.values():
             operation_id = operation.get("operationId", "")
+            if operation_id == "admin_list_users":
+                success = operation["responses"]["200"]
+                success["description"] = "조회 범위와 검색 조건에 맞는 사용자 페이지입니다."
+                for example in success["content"]["application/json"]["examples"].values():
+                    example["value"].setdefault("next_cursor", None)
+            elif operation_id == "admin_get_user":
+                operation["responses"]["200"]["description"] = (
+                    "조회할 수 있는 사용자의 현재 정보입니다."
+                )
             if operation_id == "admin_get_change_set_logs":
                 source = None
             elif operation_id == "admin_list_master_code_logs":

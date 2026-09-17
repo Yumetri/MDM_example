@@ -108,6 +108,10 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
     )
     assert schema["tags"] == [
         {
+            "name": "AdminUsers",
+            "description": "관리자가 권한 범위 안에서 사용자 목록과 상세를 조회합니다.",
+        },
+        {
             "name": "Authentication",
             "description": "로그인·세션 갱신·로그아웃과 현재 프로필을 제공합니다.",
         },
