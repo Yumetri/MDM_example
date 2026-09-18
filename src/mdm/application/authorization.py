@@ -22,6 +22,7 @@ class AuthorizationAction(StrEnum):
     REVIEW_CHANGE_REQUEST = "REVIEW_CHANGE_REQUEST"
     READ_TOMBSTONE = "READ_TOMBSTONE"
     READ_AUDIT_LOG = "READ_AUDIT_LOG"
+    READ_USERS = "READ_USERS"
     MANAGE_USER_ROLES = "MANAGE_USER_ROLES"
 
 
@@ -40,6 +41,7 @@ _ADMIN_ACTIONS = frozenset(
         AuthorizationAction.REVIEW_CHANGE_REQUEST,
         AuthorizationAction.READ_TOMBSTONE,
         AuthorizationAction.READ_AUDIT_LOG,
+        AuthorizationAction.READ_USERS,
         AuthorizationAction.MANAGE_USER_ROLES,
     }
 )

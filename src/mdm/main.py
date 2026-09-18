@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from mdm.api.admin_users import admin_user_error_handler, build_admin_user_router
 from mdm.api.audit_logs import audit_log_unavailable_handler, build_audit_log_router
 from mdm.api.auth import build_human_principal_dependency
 from mdm.api.change_requests import (
@@ -59,6 +60,12 @@ from mdm.api.string_dimensions import (
     build_category_router,
     build_country_router,
     build_model_router,
+)
+from mdm.application.admin_users import (
+    AdminUserQueries,
+    UserNotFound,
+    UserQueryUnavailable,
+    UserQueryValidationError,
 )
 from mdm.application.audit import HumanMutationAuditFactory
 from mdm.application.audit_logs import AuditLogRepositoryUnavailable, ListAuditLogs
@@ -163,6 +170,7 @@ from mdm.infrastructure.database import (
 )
 from mdm.infrastructure.jwt import RejectingAccessTokenVerifier, build_access_jwt_codec
 from mdm.infrastructure.operational_events import JsonLineOperationalEventSink
+from mdm.infrastructure.repositories.admin_users import SqlAlchemyAdminUserRepository
 from mdm.infrastructure.repositories.audit_logs import SqlAlchemyAuditLogRepository
 from mdm.infrastructure.repositories.change_requests import SqlAlchemyChangeRequestRepository
 from mdm.infrastructure.repositories.companies import SqlAlchemyCompanyRepository
@@ -196,6 +204,7 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
     """Assemble the API, application services, and infrastructure adapters."""
     engine: AsyncEngine | None = None
     auth_sessions: AuthSessionComponents | None = None
+    admin_user_router = None
     audit_log_router = None
     lifecycle_routers = []
     company_router = None
@@ -227,6 +236,13 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         authorization = AuthorizationPolicy()
         principal_dependency = build_human_principal_dependency(authenticate)
         auth_sessions = build_auth_sessions(settings, session_factory, principal_dependency)
+        admin_user_router = build_admin_user_router(
+            use_cases=AdminUserQueries(
+                SqlAlchemyAdminUserRepository(session_factory), authorization
+            ),
+            principal_dependency=principal_dependency,
+            authorization=authorization,
+        )
         audit_log_router = build_audit_log_router(
             use_case=ListAuditLogs(SqlAlchemyAuditLogRepository(session_factory), authorization),
             principal_dependency=principal_dependency,
@@ -466,6 +482,10 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         version="0.1.0",
         openapi_tags=[
             {
+                "name": "AdminUsers",
+                "description": "관리자가 권한 범위 안에서 사용자 목록과 상세를 조회합니다.",
+            },
+            {
                 "name": "Authentication",
                 "description": "로그인·세션 갱신·로그아웃과 현재 프로필을 제공합니다.",
             },
@@ -612,6 +632,10 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         application.add_exception_handler(error_type, dimension_lifecycle_error_handler)
     for router in lifecycle_routers:
         application.include_router(router)
+    for error_type in (UserNotFound, UserQueryUnavailable, UserQueryValidationError):
+        application.add_exception_handler(error_type, admin_user_error_handler)
+    if admin_user_router is not None:
+        application.include_router(admin_user_router)
     application.add_exception_handler(AuditLogRepositoryUnavailable, audit_log_unavailable_handler)
     application.include_router(build_health_router(readiness_check))
     if auth_sessions is not None:
