@@ -54,7 +54,8 @@ class UserParameters(BaseModel):
         default=None,
         min_length=1,
         max_length=512,
-        description="직전 next_cursor입니다. 검색 조건을 바꾸면 생략하고 첫 페이지부터 조회합니다.",
+        description="직전 next_cursor입니다. 검색 조건이나 호출자 권한에 따른 조회 범위가 "
+        "바뀌면 생략하고 첫 페이지부터 조회합니다.",
     )
     limit: int = Field(
         default=50,
@@ -93,17 +94,19 @@ class AdminUserListResponse(BaseModel):
     )
     next_cursor: str | None = Field(
         max_length=512,
-        description="같은 검색 조건의 다음 페이지 cursor입니다. 마지막 페이지이면 null입니다.",
+        description="같은 검색 조건과 호출자 조회 범위의 다음 페이지 cursor입니다. "
+        "마지막 페이지이면 null입니다.",
     )
 
 
-def _fingerprint(filters: UserFilters) -> str:
+def _fingerprint(filters: UserFilters, visible_role: UserRole | None) -> str:
     payload = json.dumps(
         {
             "path": _COLLECTION,
             "email": None if filters.email is None else filters.email.value,
             "role": filters.role,
             "status": filters.status,
+            "visible_role": visible_role,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -111,11 +114,11 @@ def _fingerprint(filters: UserFilters) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def _encode_cursor(cursor: UserCursor, filters: UserFilters) -> str:
+def _encode_cursor(cursor: UserCursor, filters: UserFilters, visible_role: UserRole | None) -> str:
     payload = json.dumps(
         {
             "v": 1,
-            "q": _fingerprint(filters),
+            "q": _fingerprint(filters, visible_role),
             "t": cursor.created_at.astimezone(UTC).isoformat(),
             "i": str(cursor.id),
         },
@@ -124,7 +127,9 @@ def _encode_cursor(cursor: UserCursor, filters: UserFilters) -> str:
     return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
 
 
-def _decode_cursor(encoded: str | None, filters: UserFilters) -> UserCursor | None:
+def _decode_cursor(
+    encoded: str | None, filters: UserFilters, visible_role: UserRole | None
+) -> UserCursor | None:
     if encoded is None:
         return None
     try:
@@ -133,10 +138,14 @@ def _decode_cursor(encoded: str | None, filters: UserFilters) -> UserCursor | No
         )
         if not isinstance(data, dict) or set(data) != {"v", "q", "t", "i"}:
             raise ValueError
-        if type(data["v"]) is not int or data["v"] != 1 or data["q"] != _fingerprint(filters):
+        if (
+            type(data["v"]) is not int
+            or data["v"] != 1
+            or data["q"] != _fingerprint(filters, visible_role)
+        ):
             raise ValueError
         cursor = UserCursor(datetime.fromisoformat(data["t"]), UUID(data["i"]))
-        if _encode_cursor(cursor, filters) != encoded:
+        if _encode_cursor(cursor, filters, visible_role) != encoded:
             raise ValueError
         return cursor
     except (
@@ -150,7 +159,8 @@ def _decode_cursor(encoded: str | None, filters: UserFilters) -> UserCursor | No
     ):
         raise UserQueryValidationError(
             "query.cursor",
-            "cursor가 유효하지 않거나 검색 조건과 다릅니다. 생략하고 다시 조회해 주세요.",
+            "cursor가 유효하지 않거나 검색 조건 또는 조회 범위가 다릅니다. "
+            "생략하고 첫 페이지부터 다시 조회해 주세요.",
         ) from None
 
 
@@ -248,10 +258,14 @@ def build_admin_user_router(
         summary="관리자 사용자 목록 조회",
         description=_VISIBILITY + " 제공한 필터를 모두 만족하는 사용자를 생성 시각 내림차순, "
         "같은 시각이면 UUID 내림차순으로 반환합니다. ADMIN이 role=ADMIN 또는 SUPER_ADMIN을 "
-        "지정하면 빈 목록입니다. 같은 필터와 변경 없는 데이터에서는 페이지 간 누락·중복이 "
+        "지정하면 빈 목록입니다. 같은 필터·호출자 조회 범위와 변경 없는 데이터에서는 "
+        "페이지 간 누락·중복이 "
         "없습니다. 조회 도중 데이터가 바뀌면 전체 확인에는 첫 페이지부터 재조회가 필요합니다. "
         "이메일·역할·상태 조건을 바꾸면서 이전 cursor를 보내면 422입니다. 정규화 결과가 같은 "
-        "이메일과 limit 변경은 허용합니다. 전체 건수는 제공하지 않습니다. "
+        "이메일은 같은 조건입니다. 호출자 권한에 따른 전체 사용자 조회와 일반 사용자만 "
+        "조회 사이에 범위가 바뀌어도 이전 cursor는 422로 거부하므로 첫 페이지부터 "
+        "재조회해야 합니다. 토큰이 갱신되어도 조회 범위가 같으면 cursor를 사용할 수 있고 "
+        "limit 변경은 허용합니다. 전체 건수는 제공하지 않습니다. "
         "목록 query는 email, role, status, cursor, limit만 허용하며 그 외 파라미터는 "
         "422 VALIDATION_ERROR로 거부합니다.",
         responses={
@@ -279,12 +293,13 @@ def build_admin_user_router(
         params: Annotated[UserParameters, Query()],
     ) -> AdminUserListResponse:
         filters = params.filters()
-        after = _decode_cursor(params.cursor, filters)
+        visible_role = use_cases.visible_role(principal)
+        after = _decode_cursor(params.cursor, filters, visible_role)
         page = await use_cases.list_users(principal, filters, after=after, limit=params.limit)
         cursor = None
         if page.has_more and page.items:
             last = page.items[-1]
-            cursor = _encode_cursor(UserCursor(last.created_at, last.id), filters)
+            cursor = _encode_cursor(UserCursor(last.created_at, last.id), filters, visible_role)
         return AdminUserListResponse(
             items=[AdminUserResponse.model_validate(item) for item in page.items],
             next_cursor=cursor,

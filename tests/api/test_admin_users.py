@@ -73,7 +73,7 @@ class Repository:
         return None if self.missing else replace(self.items[0], id=user_id)
 
 
-def application(role=UserRole.ADMIN):
+def application(role=UserRole.ADMIN, user_id=None):
     repository = Repository()
     authorization = AuthorizationPolicy()
     app = FastAPI()
@@ -81,7 +81,7 @@ def application(role=UserRole.ADMIN):
         build_admin_user_router(
             use_cases=AdminUserQueries(repository, authorization),
             authorization=authorization,
-            principal_dependency=lambda: HumanPrincipal(UUID(int=1), role),
+            principal_dependency=lambda: HumanPrincipal(user_id or UUID(int=1), role),
         )
     )
     app.add_exception_handler(RequestValidationError, validation_error_handler)
@@ -166,6 +166,32 @@ async def test_invalid_uuid_does_not_reach_repository():
         result = await client.get(f"{PATH}/invalid")
     assert result.status_code == 422
     assert repository.calls == []
+
+
+@pytest.mark.parametrize("first_role", [UserRole.ADMIN, UserRole.SUPER_ADMIN])
+@pytest.mark.parametrize("same_scope", [False, True])
+async def test_cursor_is_bound_to_visibility_scope_not_caller_identity(first_role, same_scope):
+    first_app, _ = application(first_role)
+    async with AsyncClient(
+        transport=ASGITransport(app=first_app), base_url="http://test"
+    ) as client:
+        first = await client.get(PATH, params={"limit": 1})
+    assert first.status_code == 200
+    other_role = UserRole.SUPER_ADMIN if first_role == UserRole.ADMIN else UserRole.ADMIN
+    next_role = first_role if same_scope else other_role
+    next_app, repository = application(next_role, UUID(int=2))
+    async with AsyncClient(transport=ASGITransport(app=next_app), base_url="http://test") as client:
+        result = await client.get(PATH, params={"cursor": first.json()["next_cursor"]})
+    if same_scope:
+        assert result.status_code == 200
+        assert [item["id"] for item in result.json()["items"]] == [
+            str(UUID(int=i)) for i in (3, 2, 1)
+        ]
+        assert repository.calls[0][0] == (UserRole.USER if next_role == UserRole.ADMIN else None)
+    else:
+        assert result.status_code == 422
+        assert result.json()["code"] == "VALIDATION_ERROR"
+        assert repository.calls == []
 
 
 async def test_missing_detail_has_the_approved_problem_response():

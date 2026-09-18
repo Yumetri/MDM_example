@@ -82,7 +82,8 @@ class AdminUserQueries:
         self._repository = repository
         self._authorization = authorization
 
-    def _visible_role(self, principal: HumanPrincipal) -> UserRole | None:
+    def visible_role(self, principal: HumanPrincipal) -> UserRole | None:
+        """Resolve the authorized scope shared by pagination and database reads."""
         self._authorization.authorize(principal, AuthorizationAction.READ_USERS)
         return UserRole.USER if principal.role == UserRole.ADMIN else None
 
@@ -94,7 +95,7 @@ class AdminUserQueries:
         after: UserCursor | None,
         limit: int,
     ) -> UserPage:
-        visible_role = self._visible_role(principal)
+        visible_role = self.visible_role(principal)
         if type(limit) is not int or not 1 <= limit <= 100:
             raise UserQueryValidationError("query.limit", "페이지 크기는 1~100이어야 합니다.")
         return await self._repository.list_users(
@@ -105,7 +106,7 @@ class AdminUserQueries:
         )
 
     async def get_user(self, principal: HumanPrincipal, user_id: UUID) -> UserSummary:
-        visible_role = self._visible_role(principal)
+        visible_role = self.visible_role(principal)
         user = await self._repository.get_user(user_id, visible_role=visible_role)
         if user is None:
             raise UserNotFound

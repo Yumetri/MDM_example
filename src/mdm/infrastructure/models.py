@@ -65,6 +65,8 @@ class UserRecord(Base):
 
     __tablename__ = "users"
     __table_args__ = (
+        Index("ix_users_created_at_id", text("created_at DESC"), text("id DESC")),
+        Index("ix_users_role_created_at_id", "role", text("created_at DESC"), text("id DESC")),
         UniqueConstraint("normalized_email", name="uq_users_normalized_email"),
         CheckConstraint(
             "char_length(normalized_email) BETWEEN 3 AND 254",

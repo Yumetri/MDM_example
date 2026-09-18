@@ -276,6 +276,73 @@ async def test_production_composition_uses_signed_jwt_role_and_real_database(
                 assert detail.status_code == 200
                 assert set(detail.json()) == FIELDS
 
+                first = await client.get(
+                    PATH,
+                    params={"limit": 1},
+                    headers={"Authorization": f"Bearer {token.reveal()}"},
+                )
+                cursor = first.json()["next_cursor"]
+                assert cursor is not None
+                renewed = codec.issue(
+                    user_id=UUID(int=5), role=role, issued_at=int(datetime.now(UTC).timestamp())
+                )
+                assert renewed.reveal() != token.reveal()
+                following = await client.get(
+                    PATH,
+                    params={"cursor": cursor},
+                    headers={"Authorization": f"Bearer {renewed.reveal()}"},
+                )
+                assert following.status_code == 200
+                first_id = first.json()["items"][0]["id"]
+                assert {item["id"] for item in following.json()["items"]} == expected - {first_id}
+
+                changed_role = UserRole.SUPER_ADMIN if role == UserRole.ADMIN else UserRole.ADMIN
+                changed = codec.issue(
+                    user_id=UUID(int=5),
+                    role=changed_role,
+                    issued_at=int(datetime.now(UTC).timestamp()),
+                )
+                changed_headers = {"Authorization": f"Bearer {changed.reveal()}"}
+                rejected = await client.get(
+                    PATH, params={"cursor": cursor}, headers=changed_headers
+                )
+                assert rejected.status_code == 422
+                assert rejected.json()["code"] == "VALIDATION_ERROR"
+                restarted = await client.get(PATH, headers=changed_headers)
+                assert restarted.status_code == 200
+                assert {item["id"] for item in restarted.json()["items"]} == {
+                    str(row["id"])
+                    for row in users
+                    if changed_role == UserRole.SUPER_ADMIN or row["role"] == "USER"
+                }
+
+
+async def test_migration_installs_valid_user_pagination_indexes(user_db):
+    engine, _, _, _ = user_db
+    async with engine.connect() as connection:
+        rows = (
+            (
+                await connection.execute(
+                    text("""
+                    SELECT indexrelid::regclass::text AS name, pg_get_indexdef(indexrelid) AS ddl,
+                           indisvalid, indisready
+                    FROM pg_index
+                    WHERE indrelid = 'public.users'::regclass
+                """)
+                )
+            )
+            .mappings()
+            .all()
+        )
+    indexes = {row["name"]: row for row in rows}
+    for name, columns in (
+        ("ix_users_created_at_id", "(created_at DESC, id DESC)"),
+        ("ix_users_role_created_at_id", "(role, created_at DESC, id DESC)"),
+    ):
+        assert name in indexes
+        assert f"USING btree {columns}" in indexes[name]["ddl"]
+        assert indexes[name]["indisvalid"] and indexes[name]["indisready"]
+
 
 async def test_connection_refusal_returns_documented_503_for_both_routes():
     import socket
