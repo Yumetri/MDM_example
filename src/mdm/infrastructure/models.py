@@ -1134,3 +1134,62 @@ class RefreshTokenRecord(Base):
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     replaced_by_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True))
+
+
+class RegistrationChallengeRecord(Base):
+    """Email ownership verification with an absolute, non-extending deadline."""
+
+    __tablename__ = "registration_challenges"
+    __table_args__ = (
+        Index(
+            "uq_registration_challenges_active_email",
+            "normalized_email",
+            unique=True,
+            postgresql_where=text("status = 'ACTIVE'"),
+        ),
+        CheckConstraint(
+            "char_length(normalized_email) BETWEEN 3 AND 254",
+            name="ck_registration_challenge_email",
+        ),
+        CheckConstraint(
+            "(status IN ('ACTIVE', 'EXPIRED') AND completed_at IS NULL) OR "
+            "(status = 'COMPLETED' AND completed_at IS NOT NULL)",
+            name="ck_registration_challenge_state",
+        ),
+        CheckConstraint(
+            "expires_at > created_at AND (completed_at IS NULL OR "
+            "(completed_at >= created_at AND completed_at < expires_at))",
+            name="ck_registration_challenge_times",
+        ),
+    )
+    id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    normalized_email: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(9), server_default="ACTIVE")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RegistrationTokenRecord(Base):
+    """Digest-only registration credential belonging to one challenge."""
+
+    __tablename__ = "registration_tokens"
+    __table_args__ = (
+        UniqueConstraint("digest", name="uq_registration_tokens_digest"),
+        Index("ix_registration_tokens_challenge_id", "challenge_id", "id"),
+        CheckConstraint("octet_length(digest) = 32", name="ck_registration_token_digest"),
+        CheckConstraint(
+            "used_at IS NULL OR used_at >= issued_at", name="ck_registration_token_used"
+        ),
+    )
+    id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    challenge_id: Mapped[UUID] = mapped_column(
+        ForeignKey("registration_challenges.id", ondelete="RESTRICT")
+    )
+    digest: Mapped[bytes] = mapped_column(LargeBinary)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

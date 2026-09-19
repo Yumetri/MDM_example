@@ -113,7 +113,7 @@ def test_openapi_user_facing_documentation_is_korean() -> None:
         },
         {
             "name": "Authentication",
-            "description": "로그인·세션 갱신·로그아웃과 현재 프로필을 제공합니다.",
+            "description": "이메일 인증 가입·로그인·세션 갱신·로그아웃과 현재 프로필을 제공합니다.",
         },
         {
             "name": "Health",
