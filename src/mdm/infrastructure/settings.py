@@ -8,6 +8,7 @@ from pydantic import EmailStr, Field, HttpUrl, SecretStr, field_validator, model
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from mdm.application.browser_policy import BrowserProtectionPolicy
+from mdm.domain.auth import EmailAddress
 from mdm.infrastructure.network_values import normalize_network_host
 from mdm.infrastructure.request_protection import decode_ip_hmac_secret
 
@@ -25,6 +26,8 @@ class Settings(BaseSettings):
 
     database_url: SecretStr
     auth_sessions_enabled: bool = False
+    auth_registrations_enabled: bool = False
+    auth_registration_allowed_domains: tuple[str, ...] = ()
     auth_password_hash_memory_mib: int = Field(default=19, ge=1)
     auth_password_hash_iterations: int = Field(default=2, ge=1)
     auth_password_hash_parallelism: int = Field(default=1, ge=1)
@@ -46,6 +49,40 @@ class Settings(BaseSettings):
     email_smtp_password: SecretStr | None = Field(default=None, min_length=1)
     email_sender_address: EmailStr | None = None
     email_smtp_timeout_seconds: float = Field(default=10.0, gt=0, allow_inf_nan=False)
+
+    @field_validator("auth_registration_allowed_domains")
+    @classmethod
+    def normalize_registration_domains(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = []
+        for value in values:
+            if not value or value != value.strip() or "@" in value or "*" in value:
+                raise ValueError("registration allowlist requires exact email domains")
+            try:
+                domain = EmailAddress(f"a@{value}").value.rsplit("@", 1)[1]
+            except ValueError:
+                raise ValueError("registration allowlist requires exact email domains") from None
+            if domain not in normalized:
+                normalized.append(domain)
+        return tuple(normalized)
+
+    @model_validator(mode="after")
+    def validate_enabled_registrations(self) -> "Settings":
+        if self.auth_registrations_enabled and (
+            not self.auth_sessions_enabled
+            or any(
+                value is None
+                for value in (
+                    self.email_public_app_base_url,
+                    self.email_smtp_host,
+                    self.email_smtp_port,
+                    self.email_smtp_username,
+                    self.email_smtp_password,
+                    self.email_sender_address,
+                )
+            )
+        ):
+            raise ValueError("enabled registrations require sessions and email delivery settings")
+        return self
 
     @model_validator(mode="after")
     def validate_enabled_sessions(self) -> "Settings":
