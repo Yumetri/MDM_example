@@ -61,6 +61,10 @@ from mdm.api.string_dimensions import (
     build_country_router,
     build_model_router,
 )
+from mdm.api.user_management import (
+    build_user_management_router,
+    user_management_unavailable_handler,
+)
 from mdm.application.admin_users import (
     AdminUserQueries,
     UserNotFound,
@@ -161,6 +165,7 @@ from mdm.application.string_dimensions import (
     UpdateCountryValue,
     UpdateModelValue,
 )
+from mdm.application.user_management import UserManagement, UserManagementUnavailable
 from mdm.auth_sessions import AuthSessionComponents, build_auth_sessions
 from mdm.domain.dimensions import DimensionValidationError
 from mdm.infrastructure.database import (
@@ -196,6 +201,7 @@ from mdm.infrastructure.repositories.string_dimensions import (
     SqlAlchemyCountryRepository,
     SqlAlchemyModelRepository,
 )
+from mdm.infrastructure.repositories.user_management import SqlAlchemyUserManagementRepository
 from mdm.infrastructure.settings import Settings
 from mdm.infrastructure.uuid7 import Uuid7Generator
 
@@ -204,6 +210,7 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
     """Assemble the API, application services, and infrastructure adapters."""
     engine: AsyncEngine | None = None
     auth_sessions: AuthSessionComponents | None = None
+    user_management_router = None
     admin_user_router = None
     audit_log_router = None
     lifecycle_routers = []
@@ -239,6 +246,13 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         admin_user_router = build_admin_user_router(
             use_cases=AdminUserQueries(
                 SqlAlchemyAdminUserRepository(session_factory), authorization
+            ),
+            principal_dependency=principal_dependency,
+            authorization=authorization,
+        )
+        user_management_router = build_user_management_router(
+            use_cases=UserManagement(
+                SqlAlchemyUserManagementRepository(session_factory), authorization
             ),
             principal_dependency=principal_dependency,
             authorization=authorization,
@@ -483,7 +497,9 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         openapi_tags=[
             {
                 "name": "AdminUsers",
-                "description": "관리자가 권한 범위 안에서 사용자 목록과 상세를 조회합니다.",
+                "description": (
+                    "관리자가 권한 범위 안에서 사용자를 조회하고 역할·활성 상태를 변경합니다."
+                ),
             },
             {
                 "name": "Authentication",
@@ -636,6 +652,11 @@ def create_app(readiness_check: ReadinessCheck | None = None) -> FastAPI:
         application.include_router(router)
     for error_type in (UserNotFound, UserQueryUnavailable, UserQueryValidationError):
         application.add_exception_handler(error_type, admin_user_error_handler)
+    application.add_exception_handler(
+        UserManagementUnavailable, user_management_unavailable_handler
+    )
+    if user_management_router is not None:
+        application.include_router(user_management_router)
     if admin_user_router is not None:
         application.include_router(admin_user_router)
     application.add_exception_handler(AuditLogRepositoryUnavailable, audit_log_unavailable_handler)
