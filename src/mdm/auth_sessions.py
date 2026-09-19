@@ -8,11 +8,13 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from mdm.api.password_lifecycle import build_password_router, unavailable_password_router
 from mdm.api.registrations import build_registration_router, unavailable_registration_router
 from mdm.api.session_cookies import SessionCookies
 from mdm.api.sessions import build_session_router, unavailable_session_router
 from mdm.application.auth import HumanPrincipal
 from mdm.application.browser_policy import BrowserProtectionPolicy
+from mdm.application.password_lifecycle import PasswordLifecycle, RequestPasswordReset
 from mdm.application.registrations import CompleteRegistration, RequestRegistration
 from mdm.application.sessions import GetCurrentProfile, SessionUseCases
 from mdm.auth_protection import build_auth_protection
@@ -24,6 +26,7 @@ from mdm.infrastructure.operational_events import (
     QueuedOperationalEventSink,
 )
 from mdm.infrastructure.passwords import build_password_hasher
+from mdm.infrastructure.repositories.password_lifecycle import SqlAlchemyPasswordRepository
 from mdm.infrastructure.repositories.registrations import SqlAlchemyRegistrationRepository
 from mdm.infrastructure.repositories.sessions import SqlAlchemySessionRepository
 from mdm.infrastructure.settings import Settings
@@ -44,9 +47,14 @@ def build_auth_sessions(
     service: SessionUseCases | None = None
     request_registration: RequestRegistration | None = None
     complete_registration: CompleteRegistration | None = None
+    password_service: PasswordLifecycle | None = None
+    request_password_reset: RequestPasswordReset | None = None
+    password_repository = SqlAlchemyPasswordRepository(session_factory)
     registration_repository = SqlAlchemyRegistrationRepository(session_factory)
     email_sender = (
-        build_smtp_email_sender(settings) if settings.auth_registrations_enabled else None
+        build_smtp_email_sender(settings)
+        if settings.auth_registrations_enabled or settings.auth_password_resets_enabled
+        else None
     )
     events = QueuedOperationalEventSink(
         JsonLineOperationalEventSink(destination="stderr"),
@@ -69,6 +77,7 @@ def build_auth_sessions(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         nonlocal service, request_registration, complete_registration
+        nonlocal password_service, request_password_reset
         del app
         if not settings.auth_sessions_enabled:
             yield
@@ -86,7 +95,16 @@ def build_auth_sessions(
                 fake_password_hash=fake_hash,
                 clock=lambda: datetime.now(UTC),
             )
-            if email_sender is not None:
+            password_service = PasswordLifecycle(
+                password_repository, hasher, events, clock=lambda: datetime.now(UTC)
+            )
+            if settings.auth_password_resets_enabled:
+                assert email_sender is not None
+                request_password_reset = RequestPasswordReset(
+                    password_repository, email_sender, events, clock=lambda: datetime.now(UTC)
+                )
+            if settings.auth_registrations_enabled:
+                assert email_sender is not None
                 request_registration = RequestRegistration(
                     registration_repository,
                     email_sender,
@@ -105,6 +123,8 @@ def build_auth_sessions(
             service = None
             request_registration = None
             complete_registration = None
+            password_service = None
+            request_password_reset = None
             await events.aclose(grace_seconds=1)
 
     router = APIRouter()
@@ -127,6 +147,22 @@ def build_auth_sessions(
             cookies=cookies,
             request_use_case=lambda: request_registration,
             complete_use_case=lambda: complete_registration,
+        )
+    )
+    router.include_router(
+        build_password_router(
+            reset_router_for=(
+                protection.router
+                if protection is not None and settings.auth_password_resets_enabled
+                else unavailable_password_router
+            ),
+            change_router_for=(
+                protection.router if protection is not None else unavailable_password_router
+            ),
+            cookies=cookies,
+            use_cases=lambda: password_service,
+            request_use_case=lambda: request_password_reset,
+            principal_dependency=principal_dependency,
         )
     )
     return AuthSessionComponents(router=router, lifespan=lifespan)

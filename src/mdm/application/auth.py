@@ -65,6 +65,7 @@ type OperationalEventName = Literal[
     "RATE_LIMIT_CAPACITY_EXCEEDED",
     "CLIENT_IP_UNRESOLVED",
     "EMAIL_DELIVERY_FAILED",
+    "SESSION_PRINCIPAL_MISMATCH",
 ]
 
 

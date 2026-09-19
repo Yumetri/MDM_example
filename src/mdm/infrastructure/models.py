@@ -1193,3 +1193,63 @@ class RegistrationTokenRecord(Base):
     digest: Mapped[bytes] = mapped_column(LargeBinary)
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PasswordResetChallengeRecord(Base):
+    """A user's reset window, retained after completion, expiry or revocation."""
+
+    __tablename__ = "password_reset_challenges"
+    __table_args__ = (
+        Index(
+            "uq_password_reset_challenges_active_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status = 'ACTIVE'"),
+        ),
+        Index("ix_password_reset_challenges_user_id", "user_id", "id"),
+        CheckConstraint(
+            "(status IN ('ACTIVE', 'EXPIRED') AND completed_at IS NULL AND revoked_at IS NULL) OR "
+            "(status = 'COMPLETED' AND completed_at IS NOT NULL AND revoked_at IS NULL) OR "
+            "(status = 'REVOKED' AND completed_at IS NULL AND revoked_at IS NOT NULL)",
+            name="ck_password_reset_challenge_state",
+        ),
+        CheckConstraint(
+            "expires_at > created_at AND "
+            "(completed_at IS NULL OR "
+            "(completed_at >= created_at AND completed_at < expires_at)) AND "
+            "(revoked_at IS NULL OR revoked_at >= created_at)",
+            name="ck_password_reset_challenge_times",
+        ),
+    )
+    id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    status: Mapped[str] = mapped_column(String(9), server_default="ACTIVE")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PasswordResetTokenRecord(Base):
+    """One reset credential; raw tokens are never persisted."""
+
+    __tablename__ = "password_reset_tokens"
+    __table_args__ = (
+        UniqueConstraint("digest", name="uq_password_reset_tokens_digest"),
+        Index("ix_password_reset_tokens_challenge_id", "challenge_id", "id"),
+        CheckConstraint("octet_length(digest) = 32", name="ck_password_reset_token_digest"),
+        CheckConstraint(
+            "used_at IS NULL OR used_at >= issued_at", name="ck_password_reset_token_used"
+        ),
+    )
+    id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    challenge_id: Mapped[UUID] = mapped_column(
+        ForeignKey("password_reset_challenges.id", ondelete="RESTRICT")
+    )
+    digest: Mapped[bytes] = mapped_column(LargeBinary)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
