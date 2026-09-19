@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     database_url: SecretStr
     auth_sessions_enabled: bool = False
     auth_registrations_enabled: bool = False
+    auth_password_resets_enabled: bool = False
     auth_registration_allowed_domains: tuple[str, ...] = ()
     auth_password_hash_memory_mib: int = Field(default=19, ge=1)
     auth_password_hash_iterations: int = Field(default=2, ge=1)
@@ -67,22 +68,28 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_enabled_registrations(self) -> "Settings":
-        if self.auth_registrations_enabled and (
-            not self.auth_sessions_enabled
-            or any(
-                value is None
-                for value in (
-                    self.email_public_app_base_url,
-                    self.email_smtp_host,
-                    self.email_smtp_port,
-                    self.email_smtp_username,
-                    self.email_smtp_password,
-                    self.email_sender_address,
-                )
-            )
-        ):
+        if self.auth_registrations_enabled and not self._has_email_flow_configuration():
             raise ValueError("enabled registrations require sessions and email delivery settings")
         return self
+
+    @model_validator(mode="after")
+    def validate_enabled_password_resets(self) -> "Settings":
+        if self.auth_password_resets_enabled and not self._has_email_flow_configuration():
+            raise ValueError("enabled password resets require sessions and email delivery settings")
+        return self
+
+    def _has_email_flow_configuration(self) -> bool:
+        return self.auth_sessions_enabled and all(
+            value is not None
+            for value in (
+                self.email_public_app_base_url,
+                self.email_smtp_host,
+                self.email_smtp_port,
+                self.email_smtp_username,
+                self.email_smtp_password,
+                self.email_sender_address,
+            )
+        )
 
     @model_validator(mode="after")
     def validate_enabled_sessions(self) -> "Settings":

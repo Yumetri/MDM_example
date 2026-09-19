@@ -51,7 +51,10 @@ async def user_db():
     users[0]["normalized_email"] = "strasse@xn--bcher-kva.de"
     async with engine.begin() as connection:
         await connection.execute(
-            text("TRUNCATE refresh_tokens, refresh_families, user_security_events, users")
+            text(
+                "TRUNCATE password_reset_tokens, password_reset_challenges, "
+                "refresh_tokens, refresh_families, user_security_events, users"
+            )
         )
         await connection.execute(insert(UserRecord), users)
         await connection.execute(

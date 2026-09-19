@@ -33,7 +33,10 @@ async def auth_engine() -> AsyncGenerator[AsyncEngine]:
     engine = create_engine(Settings().reveal_database_url())
     async with engine.begin() as connection:
         await connection.execute(
-            text("TRUNCATE refresh_tokens, refresh_families, user_security_events, users")
+            text(
+                "TRUNCATE password_reset_tokens, password_reset_challenges, "
+                "refresh_tokens, refresh_families, user_security_events, users"
+            )
         )
     yield engine
     await engine.dispose()
