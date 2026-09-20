@@ -43,6 +43,7 @@ OTHER_USER_ID = UUID("018f3f0e-7b2a-7e8f-9f62-1234567890ab")
         (
             UserRole.SUPER_ADMIN,
             {
+                AuthorizationAction.MANAGE_USER_STATUS,
                 AuthorizationAction.READ_DATA,
                 AuthorizationAction.MUTATE_DATA,
                 AuthorizationAction.REVIEW_CHANGE_REQUEST,
@@ -89,9 +90,12 @@ def test_policy_fails_closed_for_a_non_human_role_value() -> None:
         (UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.USER),
         (UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.ADMIN),
         (UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.SUPER_ADMIN),
+        (UserRole.SUPER_ADMIN, UserRole.SUPER_ADMIN, UserRole.USER),
+        (UserRole.SUPER_ADMIN, UserRole.SUPER_ADMIN, UserRole.ADMIN),
+        (UserRole.SUPER_ADMIN, UserRole.SUPER_ADMIN, UserRole.SUPER_ADMIN),
     ],
 )
-def test_role_change_allows_only_lower_targets_up_to_the_actor_role(
+def test_role_change_allows_lower_targets_and_super_admin_peers(
     actor_role: UserRole,
     target_role: UserRole,
     new_role: UserRole,
@@ -118,10 +122,9 @@ def test_role_change_allows_only_lower_targets_up_to_the_actor_role(
         (UserRole.ADMIN, UserRole.ADMIN, UserRole.USER),
         (UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.USER),
         (UserRole.ADMIN, UserRole.USER, UserRole.SUPER_ADMIN),
-        (UserRole.SUPER_ADMIN, UserRole.SUPER_ADMIN, UserRole.USER),
     ],
 )
-def test_role_change_rejects_peer_higher_and_above_actor_changes(
+def test_role_change_rejects_admin_peers_higher_and_above_actor_changes(
     actor_role: UserRole,
     target_role: UserRole,
     new_role: UserRole,

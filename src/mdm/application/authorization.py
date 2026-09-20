@@ -24,6 +24,7 @@ class AuthorizationAction(StrEnum):
     READ_AUDIT_LOG = "READ_AUDIT_LOG"
     READ_USERS = "READ_USERS"
     MANAGE_USER_ROLES = "MANAGE_USER_ROLES"
+    MANAGE_USER_STATUS = "MANAGE_USER_STATUS"
 
 
 _USER_ACTIONS = frozenset(
@@ -48,7 +49,7 @@ _ADMIN_ACTIONS = frozenset(
 _ALLOWED_ACTIONS = {
     UserRole.USER: _USER_ACTIONS,
     UserRole.ADMIN: _ADMIN_ACTIONS,
-    UserRole.SUPER_ADMIN: _ADMIN_ACTIONS,
+    UserRole.SUPER_ADMIN: _ADMIN_ACTIONS | {AuthorizationAction.MANAGE_USER_STATUS},
 }
 _ROLE_RANK = {
     UserRole.USER: 0,
@@ -80,12 +81,14 @@ class AuthorizationPolicy:
         target_role: UserRole,
         new_role: UserRole,
     ) -> HumanPrincipal:
-        """Enforce different-user, lower-target, and actor-role ceiling rules."""
+        """Allow lower targets and SUPER_ADMIN peers, excluding self changes."""
         self.authorize(principal, AuthorizationAction.MANAGE_USER_ROLES)
         if not isinstance(target_role, UserRole) or not isinstance(new_role, UserRole):
             raise AuthorizationDenied
         if target_user_id == principal.user_id:
             raise AuthorizationDenied
+        if principal.role == UserRole.SUPER_ADMIN:
+            return principal
 
         actor_rank = _ROLE_RANK[principal.role]
         if _ROLE_RANK[target_role] >= actor_rank or _ROLE_RANK[new_role] > actor_rank:
