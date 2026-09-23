@@ -255,12 +255,15 @@ export class SessionController {
   }
 
   async requestRegistration(email: string) {
-    try { this.available(); return await this.deps.api.requestRegistration(email) }
+    try { this.available() }
     catch (error) { return this.failed(error) }
+    // Email request failures belong to the submitting form, not the shared session.
+    return this.deps.api.requestRegistration(email)
   }
 
   async requestPasswordReset(email: string) {
-    try { this.available(); return await this.deps.api.requestPasswordReset(email) }
+    try { this.available() }
     catch (error) { return this.failed(error) }
+    return this.deps.api.requestPasswordReset(email)
   }
 }

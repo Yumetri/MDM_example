@@ -62,6 +62,38 @@ describe('authentication screens', () => {
     expect(await screen.findByText('메일함을 확인해 주세요.')).toBeInTheDocument()
   })
 
+  describe.each([
+    { path: '/auth/register', method: 'requestRegistration' as const, label: '가입 안내 받기' },
+    { path: '/auth/forgot-password', method: 'requestPasswordReset' as const, label: '재설정 안내 받기' },
+  ])('$method errors', ({ path, method, label }) => {
+    it('removes the failed request error after a successful retry', async () => {
+      const { api } = await setup(path)
+      const failure = new ApiError(503, 'SERVICE_UNAVAILABLE')
+      api[method].mockRejectedValueOnce(failure)
+      fireEvent.change(screen.getByLabelText('이메일'), { target: { value: profile.email } })
+      fireEvent.click(screen.getByRole('button', { name: label }))
+      expect(await screen.findByRole('alert')).toHaveTextContent(failure.message)
+
+      fireEvent.click(screen.getByRole('button', { name: label }))
+      expect(await screen.findByRole('status')).toHaveTextContent('메일함을 확인해 주세요.')
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+      expect(api[method]).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not carry the failed email request error to the login form', async () => {
+      const { api } = await setup(path)
+      const failure = new ApiError(503, 'SERVICE_UNAVAILABLE')
+      api[method].mockRejectedValueOnce(failure)
+      fireEvent.change(screen.getByLabelText('이메일'), { target: { value: profile.email } })
+      fireEvent.click(screen.getByRole('button', { name: label }))
+      expect(await screen.findByRole('alert')).toHaveTextContent(failure.message)
+
+      fireEvent.click(screen.getByRole('link', { name: '로그인으로 돌아가기' }))
+      expect(await screen.findByRole('heading', { name: '로그인' })).toBeInTheDocument()
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    })
+  })
+
   it('retains the email token on 422 and submits it only to registration completion', async () => {
     const { api } = await setup('/auth/registration', 'A'.repeat(43))
     api.completeRegistration.mockRejectedValueOnce(new ApiError(422, 'VALIDATION_ERROR', null, ['name']))
