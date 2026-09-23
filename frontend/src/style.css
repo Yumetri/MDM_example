@@ -1,0 +1,35 @@
+:root { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #182a3a; background: #f4f7f9; font-synthesis: none; line-height: 1.6; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+.layout { width: min(100% - 32px, 520px); margin: 48px auto; }
+.brand { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 22px; margin-bottom: 28px; }
+.brand-symbol { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 10px; background: #173f57; color: white; }
+.brand-label { font-size: 15px; font-weight: 400; color: #516171; padding-left: 6px; }
+.card { background: white; border: 1px solid #d8e1e7; border-radius: 14px; padding: 32px; box-shadow: 0 8px 24px #19354e08; }
+h1 { margin: 0; font-size: 25px; line-height: 1.4; letter-spacing: -.6px; }
+h2 { font-size: 19px; margin: 26px 0 18px; }
+.description { margin: 10px 0 26px; color: #536575; }
+fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.field { margin-bottom: 20px; }
+label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 7px; }
+input { width: 100%; min-height: 46px; padding: 10px 12px; border: 1px solid #a9b9c5; border-radius: 7px; background: white; color: #182a3a; font: inherit; }
+input[aria-invalid='true'] { border-color: #a62c32; }
+input:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid #79b6d2; outline-offset: 3px; }
+small { display: block; color: #536575; margin-top: 6px; font-size: 12px; }
+button { cursor: pointer; font: inherit; min-height: 46px; padding: 10px 16px; border: 1px solid #173f57; border-radius: 7px; }
+button.primary { width: 100%; background: #173f57; color: white; font-weight: 600; }
+button:hover { filter: brightness(1.12); }
+button:disabled { opacity: .65; cursor: wait; }
+a { color: #215a78; text-underline-offset: 3px; }
+.form-links { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; margin-top: 23px; font-size: 14px; }
+.message { border: 1px solid #b6d0dc; padding: 12px 14px; background: #f0f7fa; border-radius: 7px; font-size: 14px; overflow-wrap: anywhere; }
+.error { border-color: #e4b8ba; background: #fff5f5; color: #84242a; }
+.profile { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 10px; padding-bottom: 20px; border-bottom: 1px solid #d8e1e7; }
+.profile dt { color: #536575; }
+.profile dd { margin: 0; overflow-wrap: anywhere; }
+.actions { display: flex; gap: 12px; }
+.actions form { flex: 1; }
+.actions button.primary { background: white; color: #173f57; font-size: 14px; }
+section { border-top: 1px solid #d8e1e7; margin-top: 26px; }
+footer { color: #5e6c78; font-size: 12px; text-align: center; padding: 24px 12px; }
+@media (max-width: 480px) { .layout { margin-top: 24px; } .card { padding: 24px 20px; } h1 { font-size: 23px; } }
