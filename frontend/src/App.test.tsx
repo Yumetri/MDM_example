@@ -62,6 +62,26 @@ describe('authentication screens', () => {
     expect(await screen.findByText('메일함을 확인해 주세요.')).toBeInTheDocument()
   })
 
+  it.each([
+    { link: '가입 신청', submit: '가입 안내 받기' },
+    { link: '비밀번호를 잊으셨나요?', submit: '재설정 안내 받기' },
+  ])('keeps a failed login out of $link and its success announcement', async ({ link, submit }) => {
+    const { api } = await setup()
+    const failure = new ApiError(401, 'INVALID_CREDENTIALS')
+    api.login.mockRejectedValueOnce(failure)
+    fireEvent.change(screen.getByLabelText('이메일'), { target: { value: profile.email } })
+    fireEvent.change(screen.getByLabelText('비밀번호'), { target: { value: 'wrong password' } })
+    fireEvent.click(screen.getByRole('button', { name: '로그인' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(failure.message)
+
+    fireEvent.click(screen.getByRole('link', { name: link }))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('이메일'), { target: { value: profile.email } })
+    fireEvent.click(screen.getByRole('button', { name: submit }))
+    expect(await screen.findByRole('status')).toHaveTextContent('메일함을 확인해 주세요.')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   describe.each([
     { path: '/auth/register', method: 'requestRegistration' as const, label: '가입 안내 받기' },
     { path: '/auth/forgot-password', method: 'requestPasswordReset' as const, label: '재설정 안내 받기' },

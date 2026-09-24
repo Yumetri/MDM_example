@@ -188,7 +188,11 @@ test('injected conflict: browser retries once after Retry-After and then surface
   await expect(page.getByRole('heading', { name: '내 계정', exact: true })).toBeVisible()
 })
 
-test('real API: invalid refresh returns 401 and clears cookies', async ({ page, context }) => {
+test('real API: invalid refresh clears shared cookies and signs out an already-open tab', async ({ page, context, request }) => {
+  const { email } = await register(page, request)
+  const second = await context.newPage()
+  await second.goto('/account')
+  await expect(second.getByText(email, { exact: true })).toBeVisible()
   await context.addCookies([
     { name: 'mdm_refresh', value: 'A'.repeat(43), domain: 'localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Strict' },
     { name: 'mdm_csrf', value: 'A'.repeat(43), domain: 'localhost', path: '/', secure: true, httpOnly: false, sameSite: 'Strict' },
@@ -197,6 +201,8 @@ test('real API: invalid refresh returns 401 and clears cookies', async ({ page, 
   await page.goto('/account')
   await failed
   await expect(page.getByRole('heading', { name: '로그인', exact: true })).toBeVisible()
+  await expect(second.getByRole('heading', { name: '로그인', exact: true })).toBeVisible()
+  await expect(second.getByText(email, { exact: true })).toHaveCount(0)
   expect((await context.cookies()).some((cookie) => cookie.name.startsWith('mdm_'))).toBe(false)
 })
 

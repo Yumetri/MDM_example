@@ -106,6 +106,88 @@ describe('in-memory browser session', () => {
     expect(JSON.stringify(localStorage)).not.toMatch(/memory-only-secret|one@example.net/)
   })
 
+  it.each(['startup', 'expired-access', 'password-change', 'conflict-retry'] as const)(
+    'broadcasts INVALID_SESSION during %s while the session lock is still held', async (source) => {
+      const serial = serialLock()
+      let held = false
+      const lock: SessionLock = {
+        assertAvailable() {},
+        run: (operation) => serial.run(async () => {
+          held = true
+          try { return await operation() } finally { held = false }
+        }),
+      }
+      const a = fixture(lock)
+      const b = fixture(lock)
+      await a.controller.initialize()
+      await b.controller.initialize()
+      const publish = a.state.publish.bind(a.state)
+      const observedLock: boolean[] = []
+      vi.spyOn(a.state, 'publish').mockImplementation((kind) => {
+        observedLock.push(held)
+        return publish(kind)
+      })
+      const invalid = new ApiError(401, 'INVALID_SESSION')
+      if (source === 'password-change') a.api.changePassword.mockRejectedValueOnce(invalid)
+      else {
+        if (source === 'conflict-retry') a.api.refresh.mockRejectedValueOnce(new ApiError(409, 'refresh_conflict', 1))
+        a.api.refresh.mockRejectedValueOnce(invalid)
+      }
+      if (source === 'startup' || source === 'conflict-retry') await a.controller.initialize()
+      else if (source === 'expired-access') {
+        a.advance(900_000)
+        await expect(a.controller.loadProfile()).rejects.toBe(invalid)
+      } else await expect(a.controller.changePassword({ current_password: 'old', new_password: 'new' })).rejects.toBe(invalid)
+
+      expect(observedLock).toEqual([true])
+      expect(a.state.read()?.kind).toBe('signed-out')
+      await b.controller.synchronize()
+      expect(b.controller.getSnapshot()).toMatchObject({ status: 'anonymous', profile: null })
+      expect(b.api.refresh).toHaveBeenCalledOnce()
+      expect(JSON.stringify(localStorage)).not.toMatch(/memory-only-secret|one@example.net/)
+    },
+  )
+
+  it.each([
+    [403, 'CSRF_VALIDATION_FAILED'], [409, 'refresh_conflict'], [503, 'SERVICE_UNAVAILABLE'],
+  ] as const)('does not broadcast a signed-out state for refresh %s', async (status, code) => {
+    const f = fixture()
+    f.api.refresh.mockRejectedValue(new ApiError(status, code, 1))
+    await expect(f.controller.initialize()).rejects.toMatchObject({ code })
+    expect(f.state.read()).toBeNull()
+  })
+
+  it('cancels a request queued before invalidation and preserves a subsequent new login', async () => {
+    const lock = serialLock()
+    const a = fixture(lock)
+    const b = fixture(lock)
+    await a.controller.initialize()
+    await b.controller.initialize()
+    a.api.refresh.mockRejectedValueOnce(new ApiError(401, 'INVALID_SESSION'))
+    const refresh = a.controller.initialize()
+    const logout = expect(b.controller.logout()).rejects.toBeInstanceOf(SessionChangedError)
+    await refresh
+    await logout
+    expect(b.api.logout).not.toHaveBeenCalled()
+    await a.controller.login({ email: user.email, password: 'password' })
+    await b.controller.synchronize()
+    expect(a.state.read()?.kind).toBe('signed-in')
+    expect(b.controller.getSnapshot().status).toBe('authenticated')
+  })
+
+  it('does not invalidate other tabs when only one access token is rejected', async () => {
+    const lock = serialLock()
+    const a = fixture(lock)
+    const b = fixture(lock)
+    await a.controller.initialize()
+    await b.controller.initialize()
+    a.api.me.mockRejectedValueOnce(new ApiError(401, 'INVALID_ACCESS_TOKEN'))
+    await expect(a.controller.loadProfile()).rejects.toMatchObject({ code: 'INVALID_ACCESS_TOKEN' })
+    expect(a.state.read()).toBeNull()
+    await b.controller.synchronize()
+    expect(b.controller.getSnapshot().status).toBe('authenticated')
+  })
+
   it('cancels a queued logout when another tab changes account, even without a storage event', async () => {
     const lock = serialLock()
     const a = fixture(lock)

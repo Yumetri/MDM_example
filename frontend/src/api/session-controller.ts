@@ -84,7 +84,7 @@ export class SessionController {
     if (changed) {
       this.clear(current?.kind === 'signed-in'
         ? '다른 탭의 로그인 상태를 확인하고 있습니다.'
-        : '다른 탭에서 로그아웃하거나 비밀번호를 재설정했습니다. 다시 로그인해 주세요.')
+        : '다른 탭에서 로그인 세션이 종료되었습니다. 다시 로그인해 주세요.')
       this.restoreNeeded = current?.kind === 'signed-in'
       if (this.restoreNeeded) this.update({ status: 'loading' })
     }
@@ -121,14 +121,22 @@ export class SessionController {
     this.credential = { token: grant.access_token, expiresAt: started + grant.expires_in * 1000 }
   }
 
+  private async sessionRequest<T>(request: () => Promise<T>): Promise<T> {
+    try { return await request() } catch (error) {
+      // These endpoints clear shared cookies on INVALID_SESSION. Publish before releasing the lock.
+      if (error instanceof ApiError && error.code === 'INVALID_SESSION') this.publish('signed-out')
+      throw error
+    }
+  }
+
   private async refreshLocked(): Promise<void> {
     const started = this.now()
     let grant: AccessGrant
-    try { grant = await this.deps.api.refresh() } catch (error) {
+    try { grant = await this.sessionRequest(() => this.deps.api.refresh()) } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 409 || error.code !== 'refresh_conflict') throw error
       await this.sleep((error.retryAfterSeconds ?? 1) * 1000)
       // A fresh transport call reads the current CSRF cookie; no stale request is replayed.
-      grant = await this.deps.api.refresh()
+      grant = await this.sessionRequest(() => this.deps.api.refresh())
     }
     this.remember(grant, started)
   }
@@ -203,15 +211,18 @@ export class SessionController {
   }
 
   async login(input: LoginInput): Promise<void> {
-    await this.locked(async () => {
+    const rejected = await this.locked(async () => {
       const started = this.now()
-      const grant = await this.deps.api.login(input)
+      let grant: AccessGrant
+      // Only the login request error belongs to the form; session/completion failures stay global.
+      try { grant = await this.deps.api.login(input) } catch (error) { return { error } }
       await this.afterCompletion('login', async () => {
         this.publish('signed-in')
         this.remember(grant, started)
         await this.profileLocked()
       })
     })
+    if (rejected) throw rejected.error
   }
 
   async completeRegistration(input: RegistrationInput): Promise<void> {
@@ -245,7 +256,7 @@ export class SessionController {
   async changePassword(input: PasswordChangeInput): Promise<void> {
     await this.locked(async () => {
       if (!this.credential || this.now() >= this.credential.expiresAt) await this.refreshLocked()
-      await this.deps.api.changePassword(this.credential!.token, input)
+      await this.sessionRequest(() => this.deps.api.changePassword(this.credential!.token, input))
       await this.afterCompletion('password-change', async () => {
         this.publish('signed-in')
         await this.refreshLocked()
