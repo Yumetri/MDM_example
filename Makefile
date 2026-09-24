@@ -4,7 +4,8 @@ CI_COMPOSE_PROJECT_PREFIX ?= mdm-example-ci-check
 
 .PHONY: setup jwt-key-local db-up db-ready db-down migrate migrate-test dev format lint typecheck \
 	architecture test-unit test-integration test openapi openapi-check lock-check check \
-	ci-check install-hooks
+	ci-check install-hooks frontend-install frontend-lint frontend-test frontend-e2e \
+	frontend-build frontend-check
 
 setup: install-hooks
 	@test -f .env || cp .env.example .env
@@ -73,7 +74,25 @@ openapi-check:
 lock-check:
 	uv lock --check
 
-check: lock-check lint typecheck architecture test openapi openapi-check
+frontend-install:
+	cd frontend && npm ci
+
+frontend-lint:
+	cd frontend && npm run lint
+
+frontend-test:
+	cd frontend && npm test
+
+frontend-build:
+	cd frontend && npm run build
+
+frontend-check: frontend-install
+	$(MAKE) frontend-lint frontend-test frontend-build
+
+frontend-e2e:
+	MDM_DATABASE_URL=$(TEST_DATABASE_URL) uv run python scripts/run_frontend_e2e.py
+
+check: lock-check lint typecheck architecture test openapi openapi-check frontend-check
 
 ci-check:
 	@set -eu; \
@@ -86,4 +105,6 @@ ci-check:
 		ci_port=$$(docker compose port db 5432 | awk -F: 'NR == 1 { print $$NF }'); \
 		test -n "$${ci_port}"; \
 		$(MAKE) check \
+			TEST_DATABASE_URL="postgresql+asyncpg://mdm:mdm-local@127.0.0.1:$${ci_port}/mdm_test"; \
+		$(MAKE) frontend-e2e \
 			TEST_DATABASE_URL="postgresql+asyncpg://mdm:mdm-local@127.0.0.1:$${ci_port}/mdm_test"
