@@ -71,7 +71,7 @@ class PasswordResetCompleteRequest(BaseModel):
     )
     new_password: SecretStr = Field(
         strict=True,
-        description="NFC 정규화 후 15~128자인 새 비밀번호입니다. 공백·대소문자를 유지합니다.",
+        description="NFC 정규화 후 8~128자인 새 비밀번호입니다. 공백·대소문자를 유지합니다.",
         examples=["example new password phrase"],
     )
 
@@ -80,12 +80,12 @@ class PasswordChangeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
     current_password: SecretStr = Field(
         strict=True,
-        description="현재 계정의 비밀번호입니다. NFC 정규화 후 15~128자이며 공백을 유지합니다.",
+        description="현재 계정의 비밀번호입니다. NFC 정규화 후 8~128자이며 공백을 유지합니다.",
         examples=["example current password phrase"],
     )
     new_password: SecretStr = Field(
         strict=True,
-        description="NFC 정규화 후 15~128자인 새 비밀번호입니다. 공백·대소문자를 유지합니다.",
+        description="NFC 정규화 후 8~128자인 새 비밀번호입니다. 공백·대소문자를 유지합니다.",
         examples=["example new password phrase"],
     )
 
@@ -111,7 +111,7 @@ _PROBLEMS = {
     "PASSWORD_POLICY_VIOLATION": (
         422,
         "비밀번호 정책 위반",
-        "새 비밀번호는 NFC 정규화 후 15~128자여야 합니다.",
+        "새 비밀번호는 NFC 정규화 후 8~128자여야 합니다.",
     ),
     "AUTH_PASSWORD_HASH_UNAVAILABLE": (
         503,

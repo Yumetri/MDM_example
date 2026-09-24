@@ -62,7 +62,7 @@ class RegistrationCompleteRequest(BaseModel):
     )
     password: SecretStr = Field(
         strict=True,
-        description="NFC 정규화 후 15~128자인 비밀번호입니다. 공백·대소문자를 유지합니다.",
+        description="NFC 정규화 후 8~128자인 비밀번호입니다. 공백·대소문자를 유지합니다.",
         examples=["example password phrase"],
     )
 

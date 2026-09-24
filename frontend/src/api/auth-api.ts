@@ -24,7 +24,7 @@ const messages: Record<string, string> = {
   INVALID_PASSWORD_RESET_TOKEN: '유효하지 않거나 만료된 비밀번호 재설정 링크입니다. 재설정을 다시 신청해 주세요.',
   INVALID_CURRENT_PASSWORD: '현재 비밀번호를 확인해 주세요.',
   EMAIL_DOMAIN_NOT_ALLOWED: '현재 가입이 허용된 이메일 도메인이 아닙니다.',
-  PASSWORD_POLICY_VIOLATION: '새 비밀번호는 NFC 정규화 후 15~128자여야 합니다.',
+  PASSWORD_POLICY_VIOLATION: '새 비밀번호는 NFC 정규화 후 8~128자여야 합니다.',
   VALIDATION_ERROR: '입력한 내용을 확인해 주세요.',
   ORIGIN_NOT_ALLOWED: '이 주소에서는 인증 요청을 처리할 수 없습니다. 서비스 주소를 확인해 주세요.',
   CSRF_VALIDATION_FAILED: '로그인 상태를 확인할 수 없습니다. 페이지를 새로고침한 뒤 다시 시도해 주세요.',
