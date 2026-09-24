@@ -77,10 +77,18 @@ def test_password_normalizes_nfc_without_trimming_or_casefolding() -> None:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("value", ["a" * 14, "a" * 129])
+@pytest.mark.parametrize("value", ["a" * 7, "a" * 129, "\u1100\u1161" * 7])
 def test_password_rejects_values_outside_code_point_bounds(value: str) -> None:
     with pytest.raises(AuthInvariantError):
         PlainPassword(value)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", ["a" * 8, "a" * 14, "a" * 128, "\u1100\u1161" * 8])
+def test_password_accepts_values_within_approved_code_point_bounds(value: str) -> None:
+    password = PlainPassword(value)
+
+    assert 8 <= len(password.reveal()) <= 128
 
 
 @pytest.mark.unit

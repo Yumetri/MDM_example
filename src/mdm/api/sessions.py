@@ -38,7 +38,7 @@ class LoginRequest(BaseModel):
     )
     password: SecretStr = Field(
         examples=["example password phrase"],
-        description="NFC 정규화 후 15~128자인 비밀번호입니다. 공백은 유지됩니다.",
+        description="NFC 정규화 후 8~128자인 비밀번호입니다. 공백은 유지됩니다.",
     )
 
     @field_validator("email")
@@ -209,7 +209,12 @@ def _parameters(action: AuthAction) -> dict[str, Any]:
             (
                 "mdm_refresh",
                 "cookie",
-                "HttpOnly refresh cookie입니다. 로그아웃에서는 생략할 수 있습니다.",
+                (
+                    "HttpOnly refresh cookie입니다. Origin·CSRF 검사를 통과해도 이 cookie가 "
+                    "없으면 401 INVALID_SESSION을 반환하고 두 cookie를 삭제합니다."
+                    if action == AuthAction.REFRESH
+                    else "HttpOnly refresh cookie입니다. 로그아웃에서는 생략할 수 있습니다."
+                ),
             ),
             ("mdm_csrf", "cookie", "현재 CSRF cookie 값입니다."),
             ("X-CSRF-Token", "header", "mdm_csrf cookie와 같은 값을 전달합니다."),
@@ -361,6 +366,7 @@ def build_session_router(
         "/session",
         operation_id="auth_logout_session",
         response_model=None,
+        response_description="로그아웃을 처리하고 refresh·CSRF cookie를 삭제했습니다.",
         status_code=204,
         summary="로그아웃",
         description=(
@@ -390,6 +396,7 @@ def build_session_router(
         "/me",
         operation_id="auth_get_current_profile",
         response_model=CurrentProfileResponse,
+        response_description="현재 사용자 프로필을 반환합니다.",
         status_code=200,
         summary="현재 사용자 프로필 조회",
         description=(

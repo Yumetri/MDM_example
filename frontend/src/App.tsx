@@ -8,7 +8,7 @@ import type { Navigation } from './navigation'
 interface Field { name: string; label: string; password?: boolean; autoComplete?: string; hint?: string }
 const email: Field = { name: 'email', label: '이메일', autoComplete: 'email' }
 const password: Field = { name: 'password', label: '비밀번호', password: true, autoComplete: 'current-password' }
-const policy = '15~128자. 공백과 대소문자를 구분합니다.'
+const policy = '8~128자. 공백과 대소문자를 구분합니다.'
 const newPassword: Field = { name: 'new_password', label: '새 비밀번호', password: true, autoComplete: 'new-password', hint: policy }
 
 function errorMessage(error: unknown): string {

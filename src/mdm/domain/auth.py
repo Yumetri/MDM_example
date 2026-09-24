@@ -98,8 +98,8 @@ class PlainPassword:
 
     def __post_init__(self) -> None:
         normalized = unicodedata.normalize("NFC", self._value)
-        if not 15 <= len(normalized) <= 128:
-            raise AuthInvariantError("password must contain between 15 and 128 code points")
+        if not 8 <= len(normalized) <= 128:
+            raise AuthInvariantError("password must contain between 8 and 128 code points")
         object.__setattr__(self, "_value", normalized)
 
     def reveal(self) -> str:

@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test'
 
-const password = 'browser test password phrase'
-const nextPassword = 'changed browser password phrase'
+// Exercise the approved minimum through real registration, login, change and reset flows.
+const password = 'Eight123'
+const nextPassword = 'Next1234'
 const controlOrigin = process.env.MDM_E2E_API_ORIGIN!
 const controlHeaders = { 'X-E2E-Key': process.env.MDM_E2E_CONTROL_KEY! }
 const recipient = () => `browser-${randomUUID()}@example.net`

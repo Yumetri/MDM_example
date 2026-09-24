@@ -69,6 +69,31 @@ def test_cli_reads_identity_interactively_without_echoing_secrets(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("password,expected_code", [("Eight123", 0), ("Seven12", 2)])
+def test_cli_enforces_eight_character_password_minimum(
+    password: str, expected_code: int, capsys: pytest.CaptureFixture[str]
+) -> None:
+    terminal = FakeTerminal()
+    terminal.password_answers = iter([password, password])
+    runner, calls = _runner(BootstrapOutcome.CREATED)
+
+    exit_code = cli.main(
+        ["auth", "bootstrap-super-admin"],
+        input_reader=terminal.read_text,
+        password_reader=terminal.read_password,
+        runner=runner,
+        terminal_check=lambda: True,
+    )
+
+    assert exit_code == expected_code
+    assert len(calls) == (1 if expected_code == 0 else 0)
+    captured = capsys.readouterr()
+    assert password not in captured.out + captured.err
+    if expected_code:
+        assert captured.err.strip() == "BOOTSTRAP_INPUT_INVALID"
+
+
+@pytest.mark.unit
 def test_cli_state_conflict_is_one_sanitized_nonzero_result(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
